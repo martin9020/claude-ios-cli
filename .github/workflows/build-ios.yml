@@ -100,22 +100,39 @@ jobs:
         path: build/output/*.ipa
         if-no-files-found: ignore
 
-    # --- Sideload IPA (unsigned, for AltStore) ---
-    - name: Build unsigned IPA for sideloading
+    # --- Sideload IPA (for AltStore / Sideloadly) ---
+    - name: Build sideloadable IPA
       if: github.event_name == 'workflow_dispatch'
       run: |
+        # Build with ad-hoc signing (required for sideloading tools)
         xcodebuild build \
           -project ClaudeShell.xcodeproj \
           -scheme ClaudeShell \
           -destination 'generic/platform=iOS' \
           -configuration Release \
           -derivedDataPath build/derived \
-          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGN_IDENTITY="-" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=YES \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-        # Create .ipa from .app
+        APP_PATH=$(find build/derived -name "ClaudeShell.app" -type d | head -1)
+        echo "Found app at: $APP_PATH"
+
+        if [ -z "$APP_PATH" ]; then
+          echo "ERROR: ClaudeShell.app not found"
+          find build/derived -name "*.app" -type d
+          exit 1
+        fi
+
+        # Ensure Info.plist has CFBundleExecutable
+        if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist" 2>/dev/null; then
+          /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string ClaudeShell" "$APP_PATH/Info.plist"
+        fi
+
+        # Create proper IPA structure
         mkdir -p build/sideload/Payload
-        cp -r build/derived/Build/Products/Release-iphoneos/ClaudeShell.app \
-              build/sideload/Payload/
+        cp -r "$APP_PATH" build/sideload/Payload/
         cd build/sideload && zip -r ../ClaudeShell-unsigned.ipa Payload
 
     - name: Upload unsigned IPA (for AltStore)
