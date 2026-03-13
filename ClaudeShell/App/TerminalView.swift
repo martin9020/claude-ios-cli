@@ -6,6 +6,8 @@ struct TerminalView: View {
     @State private var inputText = ""
     @State private var commandHistory: [String] = []
     @State private var historyIndex = -1
+    @State private var showSettings = false
+    @AppStorage("anthropic_api_key") private var savedApiKey = ""
     @FocusState private var inputFocused: Bool
 
     private let monoFont = Font.system(size: 13, design: .monospaced)
@@ -30,6 +32,11 @@ struct TerminalView: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.gray)
                     .lineLimit(1)
+                Button(action: { showSettings = true }) {
+                    Image(systemName: "gearshape.fill")
+                        .foregroundColor(.gray)
+                        .font(.system(size: 16))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -133,8 +140,15 @@ struct TerminalView: View {
             }
             .background(Color(red: 0.06, green: 0.06, blue: 0.1))
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .onDisappear {
+                    syncApiKey()
+                }
+        }
         .onAppear {
             showWelcome()
+            syncApiKey()
             inputFocused = true
         }
     }
@@ -335,6 +349,14 @@ struct TerminalView: View {
 
     private func insertText(_ text: String) {
         inputText += text
+    }
+
+    private func syncApiKey() {
+        // Load API key from Settings into shell environment
+        if !savedApiKey.isEmpty {
+            shell.execute("export ANTHROPIC_API_KEY=\(savedApiKey)")
+            shell.clearOutput()
+        }
     }
 
     private func showWelcome() {
