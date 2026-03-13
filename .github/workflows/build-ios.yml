@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+    inputs:
+      debug_ssh:
+        description: 'Enable SSH debug session (tmate)'
+        required: false
+        default: 'false'
 
 jobs:
   build:
@@ -22,12 +27,12 @@ jobs:
 
     - name: Select Xcode
       run: |
-        # Use the latest available Xcode on the runner
         XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
         echo "Using: $XCODE_PATH"
         sudo xcode-select -s "$XCODE_PATH"
         xcodebuild -version
 
+    # ---- Build & Test on Simulator ----
     - name: Build for Simulator
       run: |
         xcodebuild build \
@@ -46,65 +51,9 @@ jobs:
           -configuration Debug \
           CODE_SIGNING_ALLOWED=NO
 
-    # --- Signed build (only on main push with secrets configured) ---
-    - name: Install Apple certificate
-      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push' && env.HAS_SECRETS == 'true'
-      env:
-        HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
-        P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-        P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        KEYCHAIN_PASSWORD: ${{ github.run_id }}
+    # ---- Build IPA for sideloading ----
+    - name: Build for device (Release)
       run: |
-        # Create temporary keychain
-        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-        # Import certificate
-        CERT_PATH=$RUNNER_TEMP/certificate.p12
-        echo -n "$P12_BASE64" | base64 --decode -o $CERT_PATH
-        security import $CERT_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 \
-          -k $KEYCHAIN_PATH
-        security list-keychain -d user -s $KEYCHAIN_PATH
-
-    - name: Archive for distribution
-      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push' && env.HAS_SECRETS == 'true'
-      env:
-        HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
-      run: |
-        xcodebuild archive \
-          -project ClaudeShell.xcodeproj \
-          -scheme ClaudeShell \
-          -destination 'generic/platform=iOS' \
-          -archivePath build/ClaudeShell.xcarchive \
-          CODE_SIGN_IDENTITY="${{ secrets.CODE_SIGN_IDENTITY }}" \
-          PROVISIONING_PROFILE_SPECIFIER="${{ secrets.PROVISIONING_PROFILE }}" \
-          DEVELOPMENT_TEAM="${{ secrets.DEVELOPMENT_TEAM }}"
-
-    - name: Export IPA
-      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push' && env.HAS_SECRETS == 'true'
-      env:
-        HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
-      run: |
-        xcodebuild -exportArchive \
-          -archivePath build/ClaudeShell.xcarchive \
-          -exportPath build/output \
-          -exportOptionsPlist ExportOptions.plist
-
-    - name: Upload IPA artifact
-      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ClaudeShell.ipa
-        path: build/output/*.ipa
-        if-no-files-found: ignore
-
-    # --- Sideload IPA (for AltStore / Sideloadly) ---
-    - name: Build sideloadable IPA
-      if: github.event_name == 'workflow_dispatch'
-      run: |
-        # Build with ad-hoc signing (required for sideloading tools)
         xcodebuild build \
           -project ClaudeShell.xcodeproj \
           -scheme ClaudeShell \
@@ -116,50 +65,75 @@ jobs:
           CODE_SIGNING_ALLOWED=YES \
           AD_HOC_CODE_SIGNING_ALLOWED=YES
 
+    - name: Validate and package IPA
+      run: |
+        set -e
+
+        echo "=== Finding .app bundle ==="
         APP_PATH=$(find build/derived -name "ClaudeShell.app" -type d | head -1)
-        echo "Found app at: $APP_PATH"
+        echo "App: $APP_PATH"
 
         if [ -z "$APP_PATH" ]; then
-          echo "ERROR: ClaudeShell.app not found"
-          find build/derived -name "*.app" -type d
+          echo "FATAL: ClaudeShell.app not found!"
+          find build/derived -type d -name "*.app"
           exit 1
         fi
 
-        # Ensure Info.plist has CFBundleExecutable
-        if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist" 2>/dev/null; then
-          /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string ClaudeShell" "$APP_PATH/Info.plist"
-        fi
+        echo ""
+        echo "=== Validating Info.plist ==="
+        /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
+        /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
+        /usr/libexec/PlistBuddy -c "Print :CFBundleName" "$APP_PATH/Info.plist"
+        /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist"
 
-        # Create proper IPA structure
-        mkdir -p build/sideload/Payload
-        cp -r "$APP_PATH" build/sideload/Payload/
-        cd build/sideload && zip -r ../ClaudeShell-unsigned.ipa Payload
+        echo ""
+        echo "=== Checking binary ==="
+        EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")
+        ls -la "$APP_PATH/$EXECUTABLE"
+        file "$APP_PATH/$EXECUTABLE"
+        lipo -info "$APP_PATH/$EXECUTABLE"
 
-    - name: Upload unsigned IPA (for AltStore)
-      if: github.event_name == 'workflow_dispatch'
+        echo ""
+        echo "=== App bundle contents ==="
+        ls -la "$APP_PATH/"
+
+        echo ""
+        echo "=== Code signature check ==="
+        codesign -dvv "$APP_PATH" 2>&1 || echo "(unsigned — expected for sideload IPA)"
+
+        echo ""
+        echo "=== Packaging IPA ==="
+        mkdir -p build/ipa/Payload
+        cp -r "$APP_PATH" build/ipa/Payload/
+
+        # Verify Payload structure
+        echo "Payload contents:"
+        ls -la build/ipa/Payload/
+        ls -la build/ipa/Payload/ClaudeShell.app/ | head -20
+
+        cd build/ipa
+        zip -r ../ClaudeShell-sideload.ipa Payload
+        cd ../..
+
+        echo ""
+        echo "=== Final IPA ==="
+        ls -lh build/ClaudeShell-sideload.ipa
+        # Verify it's a valid zip
+        unzip -t build/ClaudeShell-sideload.ipa | tail -5
+
+        echo ""
+        echo "=== ALL CHECKS PASSED ==="
+
+    - name: Upload IPA
       uses: actions/upload-artifact@v4
       with:
-        name: ClaudeShell-unsigned.ipa
-        path: build/ClaudeShell-unsigned.ipa
-        if-no-files-found: ignore
+        name: ClaudeShell-sideload
+        path: build/ClaudeShell-sideload.ipa
 
-  # --- App Store / TestFlight Upload ---
-  publish:
-    needs: build
-    runs-on: macos-14
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-    - uses: actions/download-artifact@v4
+    # ---- Optional SSH debug session ----
+    - name: SSH debug session (tmate)
+      if: inputs.debug_ssh == 'true' || failure()
+      uses: mxschmitt/action-tmate@v3
+      timeout-minutes: 15
       with:
-        name: ClaudeShell.ipa
-      continue-on-error: true
-
-    - name: Upload to App Store Connect
-      if: hashFiles('ClaudeShell.ipa') != ''
-      run: |
-        xcrun altool --upload-app \
-          --type ios \
-          --file ClaudeShell.ipa \
-          --apiKey "${{ secrets.APPSTORE_API_KEY }}" \
-          --apiIssuer "${{ secrets.APPSTORE_API_ISSUER }}"
+        limit-access-to-actor: true
