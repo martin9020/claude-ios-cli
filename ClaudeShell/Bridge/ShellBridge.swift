@@ -68,7 +68,12 @@ class ShellBridge: ObservableObject {
     func execute(_ command: String) {
         guard let shell = shell else { return }
         let _ = shell_exec(shell, command)
-        isRunning = shell_is_running(shell) != 0
+
+        // If "exit" was called, the shell sets running=0.
+        // On iOS we keep the shell alive — reset it.
+        if shell_is_running(shell) == 0 {
+            shell_reset_running(shell)
+        }
     }
 
     /// Get the current working directory (display path)

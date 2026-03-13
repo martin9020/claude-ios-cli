@@ -315,13 +315,6 @@ struct TerminalView: View {
                 if !output.isEmpty {
                     self.terminal.addOutput(output)
                 }
-
-                // Check if shell is still running
-                if !self.shell.isRunning {
-                    self.terminal.addSystem("Shell exited. Restarting...")
-                    // Reinitialize shell
-                    self.shell.execute("true") // Force restart
-                }
             }
         }
     }

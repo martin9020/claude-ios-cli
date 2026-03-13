@@ -28,3 +28,8 @@ const char *shell_get_env(Shell *sh, const char *key) {
 void shell_output(Shell *sh, const char *text) {
     shell_printf(sh, "%s", text);
 }
+
+void shell_reset_running(Shell *sh) {
+    if (!sh) return;
+    sh->running = 1;
+}

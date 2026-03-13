@@ -24,4 +24,7 @@ const char *shell_get_env(Shell *sh, const char *key);
 // Output a string through the shell's output callback
 void shell_output(Shell *sh, const char *text);
 
+// Reset shell running state (after exit command, keeps shell alive in iOS app)
+void shell_reset_running(Shell *sh);
+
 #endif
