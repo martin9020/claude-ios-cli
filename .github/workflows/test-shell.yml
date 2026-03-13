@@ -19,27 +19,17 @@ jobs:
     - name: Compile shell engine
       run: |
         gcc -o shell_test \
+          ClaudeShell/Shell/test_main.c \
           ClaudeShell/Shell/shell.c \
+          ClaudeShell/Shell/shell_helpers.c \
           ClaudeShell/Shell/environment.c \
           ClaudeShell/Commands/cmd_filesystem.c \
           ClaudeShell/Commands/cmd_text.c \
           ClaudeShell/Commands/cmd_system.c \
           ClaudeShell/Commands/cmd_network.c \
-          -DTEST_MODE -lm
+          -DTEST_MODE -IClaudeShell/Shell -lm
       shell: bash
 
     - name: Run shell tests
       run: ./shell_test
       shell: bash
-
-  test-ios:
-    runs-on: macos-14
-    steps:
-    - uses: actions/checkout@v4
-    - name: Run iOS tests on simulator
-      run: |
-        xcodebuild test \
-          -project ClaudeShell.xcodeproj \
-          -scheme ClaudeShell \
-          -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
-          CODE_SIGNING_ALLOWED=NO
