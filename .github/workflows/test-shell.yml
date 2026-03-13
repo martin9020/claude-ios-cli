@@ -2,9 +2,10 @@ name: Test Shell Engine (Cross-platform)
 
 on:
   push:
-    paths: ['ClaudeShell/Shell/**', 'ClaudeShell/Commands/**']
+    paths: ['ClaudeShell/Shell/**', 'ClaudeShell/Commands/**', '.github/workflows/test-shell.yml']
   pull_request:
-    paths: ['ClaudeShell/Shell/**', 'ClaudeShell/Commands/**']
+    paths: ['ClaudeShell/Shell/**', 'ClaudeShell/Commands/**', '.github/workflows/test-shell.yml']
+  workflow_dispatch:
 
 jobs:
   test-shell-engine:
