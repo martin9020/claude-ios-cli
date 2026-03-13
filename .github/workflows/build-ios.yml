@@ -1,0 +1,143 @@
+name: Build ClaudeShell iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install xcodegen
+      run: brew install xcodegen
+
+    - name: Generate Xcode project
+      run: bash generate-xcodeproj.sh
+
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+    - name: Build for Simulator
+      run: |
+        xcodebuild build \
+          -project ClaudeShell.xcodeproj \
+          -scheme ClaudeShell \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
+          -configuration Debug \
+          CODE_SIGNING_ALLOWED=NO
+
+    - name: Run Tests
+      run: |
+        xcodebuild test \
+          -project ClaudeShell.xcodeproj \
+          -scheme ClaudeShellTests \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
+          -configuration Debug \
+          CODE_SIGNING_ALLOWED=NO
+
+    # --- Signed build (only on main push with secrets configured) ---
+    - name: Install Apple certificate
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.HAS_SECRETS == 'true'
+      env:
+        HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+        P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+        P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ github.run_id }}
+      run: |
+        # Create temporary keychain
+        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+        # Import certificate
+        CERT_PATH=$RUNNER_TEMP/certificate.p12
+        echo -n "$P12_BASE64" | base64 --decode -o $CERT_PATH
+        security import $CERT_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 \
+          -k $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+
+    - name: Archive for distribution
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.HAS_SECRETS == 'true'
+      env:
+        HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+      run: |
+        xcodebuild archive \
+          -project ClaudeShell.xcodeproj \
+          -scheme ClaudeShell \
+          -destination 'generic/platform=iOS' \
+          -archivePath build/ClaudeShell.xcarchive \
+          CODE_SIGN_IDENTITY="${{ secrets.CODE_SIGN_IDENTITY }}" \
+          PROVISIONING_PROFILE_SPECIFIER="${{ secrets.PROVISIONING_PROFILE }}" \
+          DEVELOPMENT_TEAM="${{ secrets.DEVELOPMENT_TEAM }}"
+
+    - name: Export IPA
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.HAS_SECRETS == 'true'
+      env:
+        HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+      run: |
+        xcodebuild -exportArchive \
+          -archivePath build/ClaudeShell.xcarchive \
+          -exportPath build/output \
+          -exportOptionsPlist ExportOptions.plist
+
+    - name: Upload IPA artifact
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ClaudeShell.ipa
+        path: build/output/*.ipa
+        if-no-files-found: ignore
+
+    # --- Sideload IPA (unsigned, for AltStore) ---
+    - name: Build unsigned IPA for sideloading
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        xcodebuild build \
+          -project ClaudeShell.xcodeproj \
+          -scheme ClaudeShell \
+          -destination 'generic/platform=iOS' \
+          -configuration Release \
+          -derivedDataPath build/derived \
+          CODE_SIGNING_ALLOWED=NO
+
+        # Create .ipa from .app
+        mkdir -p build/sideload/Payload
+        cp -r build/derived/Build/Products/Release-iphoneos/ClaudeShell.app \
+              build/sideload/Payload/
+        cd build/sideload && zip -r ../ClaudeShell-unsigned.ipa Payload
+
+    - name: Upload unsigned IPA (for AltStore)
+      if: github.event_name == 'workflow_dispatch'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ClaudeShell-unsigned.ipa
+        path: build/ClaudeShell-unsigned.ipa
+        if-no-files-found: ignore
+
+  # --- App Store / TestFlight Upload ---
+  publish:
+    needs: build
+    runs-on: macos-14
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: ClaudeShell.ipa
+      continue-on-error: true
+
+    - name: Upload to App Store Connect
+      if: hashFiles('ClaudeShell.ipa') != ''
+      run: |
+        xcrun altool --upload-app \
+          --type ios \
+          --file ClaudeShell.ipa \
+          --apiKey "${{ secrets.APPSTORE_API_KEY }}" \
+          --apiIssuer "${{ secrets.APPSTORE_API_ISSUER }}"

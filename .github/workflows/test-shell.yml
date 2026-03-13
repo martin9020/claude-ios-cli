@@ -1,0 +1,45 @@
+name: Test Shell Engine (Cross-platform)
+
+on:
+  push:
+    paths: ['ClaudeShell/Shell/**', 'ClaudeShell/Commands/**']
+  pull_request:
+    paths: ['ClaudeShell/Shell/**', 'ClaudeShell/Commands/**']
+
+jobs:
+  test-shell-engine:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Compile shell engine
+      run: |
+        gcc -o shell_test \
+          ClaudeShell/Shell/shell.c \
+          ClaudeShell/Shell/environment.c \
+          ClaudeShell/Commands/cmd_filesystem.c \
+          ClaudeShell/Commands/cmd_text.c \
+          ClaudeShell/Commands/cmd_system.c \
+          ClaudeShell/Commands/cmd_network.c \
+          -DTEST_MODE -lm
+      shell: bash
+
+    - name: Run shell tests
+      run: ./shell_test
+      shell: bash
+
+  test-ios:
+    runs-on: macos-14
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run iOS tests on simulator
+      run: |
+        xcodebuild test \
+          -project ClaudeShell.xcodeproj \
+          -scheme ClaudeShell \
+          -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
+          CODE_SIGNING_ALLOWED=NO
