@@ -6,6 +6,7 @@
 #include "../Shell/shell.h"
 #include "../Shell/builtins.h"
 #include "../Shell/environment.h"
+#include "../Shell/shell_helpers.h"
 
 // Network handler registration (from cmd_network.c)
 typedef void (*network_request_fn)(Shell *sh, const char *url, const char *method,

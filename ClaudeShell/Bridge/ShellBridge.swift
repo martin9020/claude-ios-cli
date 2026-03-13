@@ -1,9 +1,14 @@
 import Foundation
 
+/// Type alias — Shell* comes in as OpaquePointer from C because
+/// the struct contains arrays of pointers which Swift can't directly represent.
+/// We wrap all C calls through helper functions.
+typealias ShellPointer = OpaquePointer
+
 /// Bridges the C shell engine to Swift, handling callbacks for output,
 /// network requests, and Claude AI integration.
 class ShellBridge: ObservableObject {
-    private var shell: OpaquePointer?
+    private var shell: ShellPointer?
     private let sandboxRoot: String
 
     @Published var outputBuffer: String = ""
@@ -67,16 +72,13 @@ class ShellBridge: ObservableObject {
     func execute(_ command: String) {
         guard let shell = shell else { return }
         let _ = shell_exec(shell, command)
-        isRunning = shell.pointee.running != 0
+        isRunning = shell_is_running(shell)
     }
 
     /// Get the current working directory (display path)
     var currentDirectory: String {
         guard let shell = shell else { return "/" }
-        let cwd = String(cString: &shell.pointee.cwd.0)
-        let root = String(cString: &shell.pointee.root.0)
-        let display = String(cwd.dropFirst(root.count))
-        return display.isEmpty ? "/" : display
+        return String(cString: shell_get_cwd(shell))
     }
 
     /// Append text to output buffer (called from C callback)
@@ -94,6 +96,11 @@ class ShellBridge: ObservableObject {
     }
 }
 
+// MARK: - C Helper Functions
+
+/// These small C-callable helpers avoid accessing .pointee on OpaquePointer.
+/// They are defined in shell_helpers.c and exposed via the bridging header.
+
 // MARK: - C Callbacks
 
 /// Output callback — receives text from the C shell
@@ -105,7 +112,7 @@ private func shellOutputCallback(_ text: UnsafePointer<CChar>?, _ ctx: UnsafeMut
 
 /// Network request callback — handles curl/wget via URLSession
 private func networkRequestCallback(
-    _ sh: OpaquePointer?,
+    _ sh: ShellPointer?,
     _ url: UnsafePointer<CChar>?,
     _ method: UnsafePointer<CChar>?,
     _ data: UnsafePointer<CChar>?,
@@ -118,7 +125,7 @@ private func networkRequestCallback(
     let dataStr = data != nil ? String(cString: data!) : nil
 
     guard let requestURL = URL(string: urlStr) else {
-        shell_printf(sh, "curl: invalid URL: %s\n", url)
+        shell_output(sh, "curl: invalid URL\n")
         return
     }
 
@@ -131,7 +138,7 @@ private func networkRequestCallback(
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
 
-    // Synchronous request (we're already on a background context)
+    // Synchronous request
     let semaphore = DispatchSemaphore(value: 0)
     var responseBody = ""
     var statusCode = 0
@@ -153,33 +160,29 @@ private func networkRequestCallback(
 
     if let outputFile = outputFile {
         let filename = String(cString: outputFile)
-        let bridge = ShellBridge.shared
-        // Save to file in sandbox
-        let cwd = String(cString: &sh.pointee.cwd.0)
+        let cwd = String(cString: shell_get_cwd(sh))
         let filePath = "\(cwd)/\(filename)"
         try? responseBody.write(toFile: filePath, atomically: true, encoding: .utf8)
-        shell_printf(sh, "Saved to %s (%d bytes)\n",
-                     outputFile, Int32(responseBody.count))
+        shell_output(sh, "Saved to \(filename) (\(responseBody.count) bytes)\n")
     } else {
-        shell_printf(sh, "%s", responseBody)
+        shell_output(sh, responseBody)
         if !responseBody.hasSuffix("\n") {
-            shell_printf(sh, "\n")
+            shell_output(sh, "\n")
         }
     }
 
-    sh.pointee.last_exit_code = statusCode >= 200 && statusCode < 400 ? 0 : 1
+    shell_set_exit_code(sh, (statusCode >= 200 && statusCode < 400) ? 0 : 1)
 }
 
 /// Claude command callback — handles `claude` commands via ClaudeEngine
 private func claudeCommandCallback(
-    _ sh: OpaquePointer?,
+    _ sh: ShellPointer?,
     _ argc: Int32,
     _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
 ) {
     guard let sh = sh, let argv = argv, argc >= 2 else {
-        // Show help
         if let sh = sh {
-            shell_printf(sh, "Usage: claude <ask|run|edit|review|config|status> [args]\n")
+            shell_output(sh, "Usage: claude <ask|run|edit|review|config|status> [args]\n")
         }
         return
     }
@@ -196,40 +199,41 @@ private func claudeCommandCallback(
 
     switch subcommand {
     case "config":
-        shell_printf(sh, "Current API key: %s\n",
-                     shell_getenv(sh, "ANTHROPIC_API_KEY") != nil ? "****configured****" : "(not set)")
-        shell_printf(sh, "Set with: export ANTHROPIC_API_KEY=sk-ant-...\n")
+        let hasKey = shell_get_env(sh, "ANTHROPIC_API_KEY") != nil
+        shell_output(sh, "Current API key: \(hasKey ? "****configured****" : "(not set)")\n")
+        shell_output(sh, "Set with: export ANTHROPIC_API_KEY=sk-ant-...\n")
 
     case "status":
-        let hasKey = shell_getenv(sh, "ANTHROPIC_API_KEY") != nil
-        shell_printf(sh, "Claude API: %s\n", hasKey ? "ready" : "no API key set")
-        shell_printf(sh, "Model: claude-sonnet-4-20250514\n")
-        shell_printf(sh, "Shell: ClaudeShell v1.0\n")
+        let hasKey = shell_get_env(sh, "ANTHROPIC_API_KEY") != nil
+        shell_output(sh, "Claude API: \(hasKey ? "ready" : "no API key set")\n")
+        shell_output(sh, "Model: claude-sonnet-4-20250514\n")
+        shell_output(sh, "Shell: ClaudeShell v1.0\n")
 
     case "ask", "run", "edit", "review":
         if prompt.isEmpty {
-            shell_printf(sh, "claude %s: please provide a prompt\n", argv[1]!)
-            sh.pointee.last_exit_code = 1
+            shell_output(sh, "claude \(subcommand): please provide a prompt\n")
+            shell_set_exit_code(sh, 1)
             return
         }
 
-        guard let apiKeyPtr = shell_getenv(sh, "ANTHROPIC_API_KEY") else {
-            shell_printf(sh, "Error: ANTHROPIC_API_KEY not set\n")
-            shell_printf(sh, "Run: export ANTHROPIC_API_KEY=sk-ant-...\n")
-            sh.pointee.last_exit_code = 1
+        guard let apiKeyPtr = shell_get_env(sh, "ANTHROPIC_API_KEY") else {
+            shell_output(sh, "Error: ANTHROPIC_API_KEY not set\n")
+            shell_output(sh, "Run: export ANTHROPIC_API_KEY=sk-ant-...\n")
+            shell_set_exit_code(sh, 1)
             return
         }
 
         let apiKey = String(cString: apiKeyPtr)
-        shell_printf(sh, "Thinking...\n")
+        shell_output(sh, "Thinking...\n")
+
+        let cwd = String(cString: shell_get_cwd(sh))
 
         // Build context for edit/review
         var fullPrompt = prompt
         if subcommand == "edit" || subcommand == "review" {
             let filepath: String
-            let cwd = String(cString: &sh.pointee.cwd.0)
+            let root = String(cString: shell_get_root(sh))
             if prompt.hasPrefix("/") {
-                let root = String(cString: &sh.pointee.root.0)
                 filepath = root + prompt
             } else {
                 filepath = cwd + "/" + prompt
@@ -245,14 +249,14 @@ private func claudeCommandCallback(
         ClaudeEngine.shared.sendMessage(
             prompt: fullPrompt,
             apiKey: apiKey,
-            cwd: String(cString: &sh.pointee.cwd.0)
+            cwd: cwd
         ) { response in
-            shell_printf(sh, "\n%s\n", (response as NSString).utf8String!)
+            shell_output(sh, "\n\(response)\n")
         }
 
     default:
-        shell_printf(sh, "claude: unknown subcommand '%s'\n", argv[1]!)
-        shell_printf(sh, "Usage: claude <ask|run|edit|review|config|status>\n")
-        sh.pointee.last_exit_code = 1
+        shell_output(sh, "claude: unknown subcommand '\(subcommand)'\n")
+        shell_output(sh, "Usage: claude <ask|run|edit|review|config|status>\n")
+        shell_set_exit_code(sh, 1)
     }
 }
