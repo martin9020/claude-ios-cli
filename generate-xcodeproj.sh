@@ -24,7 +24,7 @@ options:
   bundleIdPrefix: com.claudeshell
   deploymentTarget:
     iOS: "16.0"
-  xcodeVersion: "15.0"
+  xcodeVersion: "14.0"
 
 settings:
   base:
