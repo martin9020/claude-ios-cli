@@ -2,9 +2,9 @@ name: Build ClaudeShell iOS
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
   workflow_dispatch:
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
 
     # --- Signed build (only on main push with secrets configured) ---
     - name: Install Apple certificate
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.HAS_SECRETS == 'true'
+      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push' && env.HAS_SECRETS == 'true'
       env:
         HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
         P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -64,7 +64,7 @@ jobs:
         security list-keychain -d user -s $KEYCHAIN_PATH
 
     - name: Archive for distribution
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.HAS_SECRETS == 'true'
+      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push' && env.HAS_SECRETS == 'true'
       env:
         HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
       run: |
@@ -78,7 +78,7 @@ jobs:
           DEVELOPMENT_TEAM="${{ secrets.DEVELOPMENT_TEAM }}"
 
     - name: Export IPA
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.HAS_SECRETS == 'true'
+      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push' && env.HAS_SECRETS == 'true'
       env:
         HAS_SECRETS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
       run: |
@@ -88,7 +88,7 @@ jobs:
           -exportOptionsPlist ExportOptions.plist
 
     - name: Upload IPA artifact
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push'
       uses: actions/upload-artifact@v4
       with:
         name: ClaudeShell.ipa
