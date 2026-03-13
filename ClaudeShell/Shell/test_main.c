@@ -15,6 +15,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#ifdef _WIN32
+#include <process.h>
+#include <direct.h>
+#else
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
 #include "shell.h"
 
 static char test_output[8192];

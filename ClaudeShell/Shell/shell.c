@@ -3,8 +3,13 @@
 #include "environment.h"
 #include <stdarg.h>
 #include <ctype.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 // Forward declarations for command dispatch
 extern int cmd_dispatch(Shell *sh, int argc, char **argv);

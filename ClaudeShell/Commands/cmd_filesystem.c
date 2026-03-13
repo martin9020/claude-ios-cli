@@ -1,10 +1,18 @@
 #include "../Shell/builtins.h"
 #include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define mkdir(path, mode) _mkdir(path)
+#define access _access
+#define F_OK 0
+#else
+#include <unistd.h>
 #include <libgen.h>
+#endif
 
 // Resolve a path relative to the sandbox
 static void resolve_path(Shell *sh, const char *input, char *output, size_t outsize) {

@@ -3,9 +3,17 @@
 #include "../Shell/builtins.h"
 #include "../Shell/environment.h"
 #include <time.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define access _access
+#define F_OK 0
+#define sleep(s) _sleep((s)*1000)
+#else
+#include <unistd.h>
+#endif
 
 // Claude command — bridges to Swift ClaudeEngine
 typedef void (*claude_handler_fn)(Shell *sh, int argc, char **argv);
