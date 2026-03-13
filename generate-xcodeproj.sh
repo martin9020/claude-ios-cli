@@ -69,56 +69,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.claudeshell.app.tests
 XCODEGEN_EOF
 
-# Create Info.plist
-mkdir -p ClaudeShell
-cat > ClaudeShell/Info.plist << 'PLIST_EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>ClaudeShell</string>
-    <key>CFBundleDisplayName</key>
-    <string>ClaudeShell</string>
-    <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-    <key>CFBundleVersion</key>
-    <string>$(CURRENT_PROJECT_VERSION)</string>
-    <key>CFBundleShortVersionString</key>
-    <string>$(MARKETING_VERSION)</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
-    <key>UIRequiredDeviceCapabilities</key>
-    <array>
-        <string>arm64</string>
-    </array>
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    <key>UILaunchScreen</key>
-    <dict>
-        <key>UIColorName</key>
-        <string>LaunchBackground</string>
-    </dict>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-    </dict>
-    <key>UIStatusBarStyle</key>
-    <string>UIStatusBarStyleLightContent</string>
-    <key>UIUserInterfaceStyle</key>
-    <string>Dark</string>
-</dict>
-</plist>
-PLIST_EOF
+# Info.plist is already in the repo — don't overwrite it
+echo "Using existing ClaudeShell/Info.plist"
 
-# Create entitlements
+# Create entitlements if missing
+if [ ! -f ClaudeShell/ClaudeShell.entitlements ]; then
 cat > ClaudeShell/ClaudeShell.entitlements << 'ENT_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -129,6 +84,7 @@ cat > ClaudeShell/ClaudeShell.entitlements << 'ENT_EOF'
 </dict>
 </plist>
 ENT_EOF
+fi
 
 # Generate Xcode project
 xcodegen generate
