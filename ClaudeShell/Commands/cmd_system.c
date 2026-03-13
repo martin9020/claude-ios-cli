@@ -85,10 +85,8 @@ int cmd_help(Shell *sh, int argc, char **argv) {
     shell_printf(sh, "\033[1mText:\033[0m        grep head tail wc sort uniq sed tr cut diff\n");
     shell_printf(sh, "\033[1mSystem:\033[0m      echo env export which clear exit help date sleep\n");
     shell_printf(sh, "\033[1mNetwork:\033[0m     curl wget\n");
-    shell_printf(sh, "\033[1mClaude AI:\033[0m   claude ask <prompt>     — Ask Claude a question\n");
-    shell_printf(sh, "             claude code <file>       — Have Claude analyze code\n");
-    shell_printf(sh, "             claude edit <file> <msg> — AI-assisted editing\n");
-    shell_printf(sh, "             claude run <task>        — Run a multi-step task\n");
+    shell_printf(sh, "\033[1mClaude AI:\033[0m   claude                  — Enter interactive AI chat\n");
+    shell_printf(sh, "             claude <message>         — One-shot AI question\n");
     shell_printf(sh, "\033[1mShell:\033[0m       VAR=val  $VAR  ${VAR}  &&  ||  \"quotes\"  'quotes'\n");
     shell_printf(sh, "\nType 'help <command>' for details.\n");
     return 0;
@@ -181,15 +179,8 @@ int cmd_claude(Shell *sh, int argc, char **argv) {
         _claude_handler(sh, argc, argv);
         return sh->last_exit_code;
     }
-    shell_printf(sh, "ClaudeShell AI Assistant\n");
-    shell_printf(sh, "========================\n\n");
-    shell_printf(sh, "Usage:\n");
-    shell_printf(sh, "  claude ask \"your question\"     Ask Claude a question\n");
-    shell_printf(sh, "  claude run \"task description\"   Run a task with Claude\n");
-    shell_printf(sh, "  claude edit file.txt            Edit a file with AI help\n");
-    shell_printf(sh, "  claude review file.txt          Review code with Claude\n");
-    shell_printf(sh, "  claude config                   Configure API key\n");
-    shell_printf(sh, "\nSet your API key: export ANTHROPIC_API_KEY=sk-...\n");
+    shell_printf(sh, "Claude AI — interactive mode handled by iOS app\n");
+    shell_printf(sh, "Set your API key: export ANTHROPIC_API_KEY=sk-...\n");
     return 0;
 }
 

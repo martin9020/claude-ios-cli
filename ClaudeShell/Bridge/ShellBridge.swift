@@ -4,10 +4,11 @@ import Foundation
 /// network requests, and Claude AI integration.
 class ShellBridge: ObservableObject {
     private var shell: UnsafeMutablePointer<Shell>?
-    private let sandboxRoot: String
+    let sandboxRoot: String
 
     @Published var outputBuffer: String = ""
     @Published var isRunning: Bool = true
+    @Published var claudeMode: Bool = false
 
     // Singleton for C callback access
     static var shared: ShellBridge?
@@ -36,8 +37,8 @@ class ShellBridge: ObservableObject {
 
             Quick start:
               help          - Show all available commands
-              claude ask    - Ask Claude AI a question
-              claude run    - Run an AI-powered task
+              claude        - Start AI chat (interactive mode)
+              claude <msg>  - Quick one-shot AI question
               ls            - List files
               cat README.txt - Read this file
 
@@ -88,6 +89,210 @@ class ShellBridge: ObservableObject {
         DispatchQueue.main.async {
             self.outputBuffer = ""
         }
+    }
+
+    /// Enter interactive Claude mode
+    func enterClaudeMode() -> String {
+        guard let shell = shell else {
+            claudeMode = false
+            return "Error: shell not initialized\n"
+        }
+
+        // Check API key
+        guard let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") else {
+            claudeMode = false
+            return """
+            \u{001B}[1;31mNo API key configured.\u{001B}[0m
+
+            Set your key first:
+              export ANTHROPIC_API_KEY=sk-ant-...
+
+            Or configure in Settings (gear icon).
+            """
+        }
+
+        let _ = String(cString: apiKeyPtr) // validate it's readable
+        claudeMode = true
+
+        // Get directory listing for context
+        let cwd = currentDirectory
+        let fullCwd = sandboxRoot + cwd
+        var fileList = ""
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: fullCwd) {
+            fileList = entries.prefix(20).joined(separator: ", ")
+            if entries.count > 20 { fileList += " ... (\(entries.count) total)" }
+        }
+
+        var banner = """
+        \u{001B}[1;35m╭──────────────────────────────────────╮\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[1;37mClaude Code\u{001B}[0m · \u{001B}[36mClaudeShell v1.0\u{001B}[0m      \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mModel: claude-sonnet-4\u{001B}[0m              \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mJust type naturally. /help for cmds\u{001B}[0m  \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m╰──────────────────────────────────────╯\u{001B}[0m
+        """
+
+        if !fileList.isEmpty {
+            banner += "\n\u{001B}[90mFiles here: \(fileList)\u{001B}[0m"
+        }
+
+        return banner
+    }
+
+    /// Handle input while in Claude mode
+    func handleClaudeInput(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+
+        // Slash commands
+        if trimmed.hasPrefix("/") {
+            return handleSlashCommand(trimmed)
+        }
+
+        // Empty input
+        if trimmed.isEmpty { return "" }
+
+        guard let shell = shell else { return "Error: shell not available\n" }
+
+        guard let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") else {
+            claudeMode = false
+            return "Error: API key lost. Run 'export ANTHROPIC_API_KEY=...' and try again.\n"
+        }
+
+        let apiKey = String(cString: apiKeyPtr)
+        let cwd = currentDirectory
+
+        // Build context: list files in current directory
+        let fullCwd = sandboxRoot + cwd
+        var dirContext = ""
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: fullCwd) {
+            dirContext = entries.joined(separator: "\n")
+        }
+
+        // If user references a file that exists, read it for context
+        var fileContext = ""
+        let words = trimmed.components(separatedBy: .whitespaces)
+        for word in words {
+            let cleanWord = word.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`,;:"))
+            if cleanWord.contains(".") && !cleanWord.hasPrefix("http") {
+                let filePath: String
+                if cleanWord.hasPrefix("/") {
+                    filePath = sandboxRoot + cleanWord
+                } else {
+                    filePath = fullCwd + "/" + cleanWord
+                }
+                if FileManager.default.fileExists(atPath: filePath),
+                   let content = try? String(contentsOfFile: filePath, encoding: .utf8) {
+                    let preview = content.count > 2000 ? String(content.prefix(2000)) + "\n...(truncated)" : content
+                    fileContext += "\n\n--- Content of \(cleanWord) ---\n\(preview)\n--- End of \(cleanWord) ---"
+                }
+            }
+        }
+
+        var fullPrompt = trimmed
+        if !fileContext.isEmpty {
+            fullPrompt += fileContext
+        }
+
+        // Call Claude
+        var result = ""
+        let semaphore = DispatchSemaphore(value: 0)
+
+        ClaudeEngine.shared.sendMessage(
+            prompt: fullPrompt,
+            apiKey: apiKey,
+            cwd: cwd,
+            directoryListing: dirContext
+        ) { response in
+            result = response
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        return result
+    }
+
+    /// Handle slash commands in Claude mode
+    private func handleSlashCommand(_ cmd: String) -> String {
+        let parts = cmd.components(separatedBy: .whitespaces)
+        let command = parts[0].lowercased()
+
+        switch command {
+        case "/exit", "/quit", "/q":
+            claudeMode = false
+            ClaudeEngine.shared.clearHistory()
+            return "\u{001B}[90mExited Claude mode.\u{001B}[0m"
+
+        case "/clear":
+            ClaudeEngine.shared.clearHistory()
+            return "\u{001B}[90mConversation cleared.\u{001B}[0m"
+
+        case "/status":
+            guard let shell = shell else { return "Shell not available\n" }
+            let hasKey = shell_get_env(shell, "ANTHROPIC_API_KEY") != nil
+            return """
+            \u{001B}[1mClaude Status\u{001B}[0m
+              API: \(hasKey ? "\u{001B}[32mconnected\u{001B}[0m" : "\u{001B}[31mno key\u{001B}[0m")
+              Model: claude-sonnet-4
+              History: \(ClaudeEngine.shared.historyCount) messages
+            """
+
+        case "/model":
+            return "\u{001B}[90mCurrent model: claude-sonnet-4\u{001B}[0m"
+
+        case "/help":
+            return """
+            \u{001B}[1mClaude Mode Commands\u{001B}[0m
+              \u{001B}[33m/exit\u{001B}[0m     Return to shell
+              \u{001B}[33m/clear\u{001B}[0m    Clear conversation history
+              \u{001B}[33m/status\u{001B}[0m   Show connection status
+              \u{001B}[33m/help\u{001B}[0m     Show this help
+
+            \u{001B}[1mJust type naturally:\u{001B}[0m
+              "make a python script that sorts files"
+              "review todo.py"
+              "what's in this directory?"
+              "explain how grep works"
+              "edit config.json and add a new field"
+            """
+
+        default:
+            return "\u{001B}[31mUnknown command: \(command)\u{001B}[0m\nType /help for available commands."
+        }
+    }
+
+    /// One-shot Claude message (for `claude <message>` without entering interactive mode)
+    func claudeOneShot(_ message: String) -> String {
+        guard let shell = shell else { return "Error: shell not available\n" }
+
+        guard let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") else {
+            return """
+            \u{001B}[31mNo API key set.\u{001B}[0m Run: export ANTHROPIC_API_KEY=sk-ant-...
+            """
+        }
+
+        let apiKey = String(cString: apiKeyPtr)
+        let cwd = currentDirectory
+        let fullCwd = sandboxRoot + cwd
+
+        var dirContext = ""
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: fullCwd) {
+            dirContext = entries.joined(separator: "\n")
+        }
+
+        var result = ""
+        let semaphore = DispatchSemaphore(value: 0)
+
+        ClaudeEngine.shared.sendMessage(
+            prompt: message,
+            apiKey: apiKey,
+            cwd: cwd,
+            directoryListing: dirContext
+        ) { response in
+            result = response
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        return result
     }
 }
 
@@ -164,89 +369,39 @@ private func networkRequestCallback(
     shell_set_exit_code(sh, (statusCode >= 200 && statusCode < 400) ? 0 : 1)
 }
 
-/// Claude command callback — handles `claude` commands via ClaudeEngine
+/// Claude command callback — handles `claude config` and `claude status` from C dispatch
 private func claudeCommandCallback(
     _ sh: UnsafeMutablePointer<Shell>?,
     _ argc: Int32,
     _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
 ) {
-    guard let sh = sh, let argv = argv, argc >= 2 else {
-        if let sh = sh {
-            shell_output(sh, "Usage: claude <ask|run|edit|review|config|status> [args]\n")
-        }
+    guard let sh = sh else { return }
+
+    // If no subcommand, this is handled by TerminalView (interactive mode)
+    guard let argv = argv, argc >= 2 else {
+        // Shouldn't reach here — TerminalView intercepts bare "claude"
+        shell_output(sh, "Type 'claude' to enter interactive AI mode.\n")
         return
     }
 
     let subcommand = String(cString: argv[1]!)
-    var args: [String] = []
-    for i in 2..<Int(argc) {
-        if let arg = argv[i] {
-            args.append(String(cString: arg))
-        }
-    }
-
-    let prompt = args.joined(separator: " ")
 
     switch subcommand {
     case "config":
         let hasKey = shell_get_env(sh, "ANTHROPIC_API_KEY") != nil
         shell_output(sh, "Current API key: \(hasKey ? "****configured****" : "(not set)")\n")
         shell_output(sh, "Set with: export ANTHROPIC_API_KEY=sk-ant-...\n")
+        shell_output(sh, "Or configure in Settings (gear icon).\n")
 
     case "status":
         let hasKey = shell_get_env(sh, "ANTHROPIC_API_KEY") != nil
         shell_output(sh, "Claude API: \(hasKey ? "ready" : "no API key set")\n")
         shell_output(sh, "Model: claude-sonnet-4-20250514\n")
+        shell_output(sh, "History: \(ClaudeEngine.shared.historyCount) messages\n")
         shell_output(sh, "Shell: ClaudeShell v1.0\n")
 
-    case "ask", "run", "edit", "review":
-        if prompt.isEmpty {
-            shell_output(sh, "claude \(subcommand): please provide a prompt\n")
-            shell_set_exit_code(sh, 1)
-            return
-        }
-
-        guard let apiKeyPtr = shell_get_env(sh, "ANTHROPIC_API_KEY") else {
-            shell_output(sh, "Error: ANTHROPIC_API_KEY not set\n")
-            shell_output(sh, "Run: export ANTHROPIC_API_KEY=sk-ant-...\n")
-            shell_set_exit_code(sh, 1)
-            return
-        }
-
-        let apiKey = String(cString: apiKeyPtr)
-        shell_output(sh, "Thinking...\n")
-
-        let cwd = String(cString: shell_get_cwd(sh))
-
-        // Build context for edit/review
-        var fullPrompt = prompt
-        if subcommand == "edit" || subcommand == "review" {
-            let filepath: String
-            let root = String(cString: shell_get_root(sh))
-            if prompt.hasPrefix("/") {
-                filepath = root + prompt
-            } else {
-                filepath = cwd + "/" + prompt
-            }
-            if let content = try? String(contentsOfFile: filepath, encoding: .utf8) {
-                fullPrompt = subcommand == "edit"
-                    ? "Edit this file and return the complete updated content:\n\n```\n\(content)\n```"
-                    : "Review this code and provide feedback:\n\n```\n\(content)\n```"
-            }
-        }
-
-        // Call Claude API
-        ClaudeEngine.shared.sendMessage(
-            prompt: fullPrompt,
-            apiKey: apiKey,
-            cwd: cwd
-        ) { response in
-            shell_output(sh, "\n\(response)\n")
-        }
-
     default:
-        shell_output(sh, "claude: unknown subcommand '\(subcommand)'\n")
-        shell_output(sh, "Usage: claude <ask|run|edit|review|config|status>\n")
-        shell_set_exit_code(sh, 1)
+        // Any other "claude <message>" is handled by TerminalView as one-shot
+        shell_output(sh, "Handled by interactive mode.\n")
     }
 }

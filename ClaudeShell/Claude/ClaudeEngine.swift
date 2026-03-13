@@ -6,29 +6,54 @@ class ClaudeEngine {
 
     private let apiURL = "https://api.anthropic.com/v1/messages"
     private let model = "claude-sonnet-4-20250514"
-    private var conversationHistory: [[String: Any]] = []
+    private(set) var conversationHistory: [[String: Any]] = []
+
+    /// Number of messages in history
+    var historyCount: Int { conversationHistory.count }
 
     /// System prompt for Claude when used inside ClaudeShell
-    private let systemPrompt = """
-    You are Claude, running inside ClaudeShell on an iOS device.
-    You are a coding assistant with access to a sandboxed Linux-like environment.
+    private func buildSystemPrompt(cwd: String, directoryListing: String) -> String {
+        var prompt = """
+        You are Claude, running inside ClaudeShell — a terminal app on iOS.
+        You are a hands-on coding assistant. The user is at a shell prompt and can run commands.
 
-    The user can execute shell commands in this environment. Available commands include:
-    ls, cat, cp, mv, rm, mkdir, touch, pwd, cd, find, grep, head, tail, wc, sort,
-    sed, cut, diff, echo, env, curl, wget, and more.
+        CURRENT DIRECTORY: \(cwd)
+        """
 
-    When the user asks you to perform tasks:
-    - Provide shell commands they can run
-    - Write code and save it to files
-    - Help debug issues
-    - Explain code and concepts
+        if !directoryListing.isEmpty {
+            prompt += """
 
-    Keep responses concise since this runs on a mobile device.
-    Use the available shell commands when suggesting solutions.
-    """
+            FILES IN CURRENT DIRECTORY:
+            \(directoryListing)
+            """
+        }
+
+        prompt += """
+
+
+        AVAILABLE SHELL COMMANDS:
+        Filesystem: ls, cat, cp, mv, rm, mkdir, touch, pwd, cd, find, chmod, du, ln
+        Text: grep, head, tail, wc, sort, uniq, sed, tr, cut, diff
+        System: echo, env, export, which, clear, exit, help, date, sleep, test, basename, dirname
+        Network: curl, wget
+
+        HOW TO RESPOND:
+        - Be concise — this is a mobile screen
+        - When the user wants to create or edit files, show the exact shell commands to run
+        - Use echo with redirect or cat heredoc patterns to write files
+        - When asked to review or explain code, give focused feedback
+        - When asked to do a task, break it into shell commands the user can run
+        - If you suggest commands, format them clearly so the user can copy them
+        - Infer intent: "review X" = code review, "edit X" = suggest changes, "explain X" = explain
+        - You can read file contents provided in the context to give informed answers
+        """
+
+        return prompt
+    }
 
     /// Send a message to Claude and get a response
     func sendMessage(prompt: String, apiKey: String, cwd: String,
+                     directoryListing: String = "",
                      completion: @escaping (String) -> Void) {
 
         // Add user message to history
@@ -42,11 +67,13 @@ class ClaudeEngine {
             conversationHistory = Array(conversationHistory.suffix(20))
         }
 
+        let systemPrompt = buildSystemPrompt(cwd: cwd, directoryListing: directoryListing)
+
         // Build request
         let requestBody: [String: Any] = [
             "model": model,
             "max_tokens": 4096,
-            "system": systemPrompt + "\n\nCurrent directory: \(cwd)",
+            "system": systemPrompt,
             "messages": conversationHistory
         ]
 

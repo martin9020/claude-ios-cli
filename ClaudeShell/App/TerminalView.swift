@@ -10,6 +10,7 @@ struct TerminalView: View {
 
     private let monoFont = Font.system(size: 13, design: .monospaced)
     private let promptColor = Color.green
+    private let claudePromptColor = Color.purple
     private let outputColor = Color.white
     private let errorColor = Color.red
     private let systemColor = Color.cyan
@@ -63,7 +64,7 @@ struct TerminalView: View {
             HStack(spacing: 8) {
                 Text(promptString)
                     .font(monoFont)
-                    .foregroundColor(promptColor)
+                    .foregroundColor(shell.claudeMode ? claudePromptColor : promptColor)
                     .fixedSize()
 
                 TextField("", text: $inputText)
@@ -100,21 +101,32 @@ struct TerminalView: View {
             .padding(.vertical, 10)
             .background(Color(red: 0.08, green: 0.08, blue: 0.12))
 
-            // Quick command bar
+            // Quick command bar — context-dependent
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    quickButton("ls", command: "ls -la")
-                    quickButton("pwd", command: "pwd")
-                    quickButton("clear", command: "clear")
-                    quickButton("help", command: "help")
-                    quickButton("claude", command: "claude")
-                    quickButton("ctrl+c", command: "") // Cancel
-                    quickButton("|", command: "| ")
-                    quickButton(">", command: "> ")
-                    quickButton("&&", command: " && ")
-                    quickButton("~", command: "~/")
-                    quickButton("/", command: "/")
-                    quickButton("..", command: "cd ..")
+                    if shell.claudeMode {
+                        quickButton("/exit", command: "/exit")
+                        quickButton("/clear", command: "/clear")
+                        quickButton("/help", command: "/help")
+                        quickButton("/status", command: "/status")
+                        quickButton("review ", command: "review ")
+                        quickButton("explain ", command: "explain ")
+                        quickButton("edit ", command: "edit ")
+                        quickButton("create ", command: "create ")
+                    } else {
+                        quickButton("ls", command: "ls -la")
+                        quickButton("pwd", command: "pwd")
+                        quickButton("clear", command: "clear")
+                        quickButton("help", command: "help")
+                        quickButton("claude", command: "claude")
+                        quickButton("ctrl+c", command: "") // Cancel
+                        quickButton("|", command: "| ")
+                        quickButton(">", command: "> ")
+                        quickButton("&&", command: " && ")
+                        quickButton("~", command: "~/")
+                        quickButton("/", command: "/")
+                        quickButton("..", command: "cd ..")
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -174,6 +186,9 @@ struct TerminalView: View {
     // MARK: - Properties
 
     private var promptString: String {
+        if shell.claudeMode {
+            return "claude>"
+        }
         let dir = shell.currentDirectory
         let shortDir = dir == "/" ? "~" : (dir as NSString).lastPathComponent
         return "\(shortDir) $"
@@ -197,10 +212,77 @@ struct TerminalView: View {
         // Clear input
         inputText = ""
 
+        // --- Claude mode: route input to Claude ---
+        if shell.claudeMode {
+            // Handle clear in claude mode too
+            if command == "clear" || command == "/clear" {
+                terminal.clear()
+                if command == "/clear" {
+                    ClaudeEngine.shared.clearHistory()
+                }
+                return
+            }
+
+            terminal.addSystem("Thinking...")
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                let response = self.shell.handleClaudeInput(command)
+
+                DispatchQueue.main.async {
+                    // Remove "Thinking..." line
+                    if let lastIdx = self.terminal.lines.lastIndex(where: { $0.text == "Thinking..." }) {
+                        self.terminal.lines.remove(at: lastIdx)
+                    }
+
+                    if !response.isEmpty {
+                        self.terminal.addOutput(response)
+                    }
+                }
+            }
+            return
+        }
+
+        // --- Normal shell mode ---
+
         // Handle clear specially
         if command == "clear" {
             terminal.clear()
             return
+        }
+
+        // Check if user typed "claude" to enter interactive mode
+        // "claude" alone or "claude" with no real subcommand
+        let parts = command.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        if parts.first == "claude" {
+            if parts.count == 1 {
+                // No args: enter interactive Claude mode
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let banner = self.shell.enterClaudeMode()
+                    DispatchQueue.main.async {
+                        self.terminal.addOutput(banner)
+                    }
+                }
+                return
+            } else if parts.count >= 2 && !["config", "status"].contains(parts[1]) {
+                // One-shot: "claude fix this bug" / "claude review main.swift"
+                let message = parts.dropFirst().joined(separator: " ")
+                terminal.addSystem("Thinking...")
+
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let response = self.shell.claudeOneShot(message)
+
+                    DispatchQueue.main.async {
+                        if let lastIdx = self.terminal.lines.lastIndex(where: { $0.text == "Thinking..." }) {
+                            self.terminal.lines.remove(at: lastIdx)
+                        }
+                        if !response.isEmpty {
+                            self.terminal.addOutput(response)
+                        }
+                    }
+                }
+                return
+            }
+            // "claude config" / "claude status" fall through to shell
         }
 
         // Execute on background thread
@@ -257,7 +339,7 @@ struct TerminalView: View {
 
     private func showWelcome() {
         terminal.addSystem("ClaudeShell v1.0 — Claude Code for iOS")
-        terminal.addSystem("Type 'help' for commands, 'claude' for AI assistant")
+        terminal.addSystem("Type 'help' for commands, 'claude' to start AI chat")
         terminal.addSystem("")
     }
 }
