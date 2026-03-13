@@ -1,14 +1,9 @@
 import Foundation
 
-/// Type alias — Shell* comes in as OpaquePointer from C because
-/// the struct contains arrays of pointers which Swift can't directly represent.
-/// We wrap all C calls through helper functions.
-typealias ShellPointer = OpaquePointer
-
 /// Bridges the C shell engine to Swift, handling callbacks for output,
 /// network requests, and Claude AI integration.
 class ShellBridge: ObservableObject {
-    private var shell: ShellPointer?
+    private var shell: UnsafeMutablePointer<Shell>?
     private let sandboxRoot: String
 
     @Published var outputBuffer: String = ""
@@ -72,7 +67,7 @@ class ShellBridge: ObservableObject {
     func execute(_ command: String) {
         guard let shell = shell else { return }
         let _ = shell_exec(shell, command)
-        isRunning = shell_is_running(shell)
+        isRunning = shell_is_running(shell) != 0
     }
 
     /// Get the current working directory (display path)
@@ -96,11 +91,6 @@ class ShellBridge: ObservableObject {
     }
 }
 
-// MARK: - C Helper Functions
-
-/// These small C-callable helpers avoid accessing .pointee on OpaquePointer.
-/// They are defined in shell_helpers.c and exposed via the bridging header.
-
 // MARK: - C Callbacks
 
 /// Output callback — receives text from the C shell
@@ -112,7 +102,7 @@ private func shellOutputCallback(_ text: UnsafePointer<CChar>?, _ ctx: UnsafeMut
 
 /// Network request callback — handles curl/wget via URLSession
 private func networkRequestCallback(
-    _ sh: ShellPointer?,
+    _ sh: UnsafeMutablePointer<Shell>?,
     _ url: UnsafePointer<CChar>?,
     _ method: UnsafePointer<CChar>?,
     _ data: UnsafePointer<CChar>?,
@@ -143,13 +133,13 @@ private func networkRequestCallback(
     var responseBody = ""
     var statusCode = 0
 
-    let task = URLSession.shared.dataTask(with: request) { data, response, error in
+    let task = URLSession.shared.dataTask(with: request) { respData, response, error in
         if let error = error {
             responseBody = "curl: \(error.localizedDescription)\n"
             statusCode = 1
         } else if let httpResponse = response as? HTTPURLResponse {
             statusCode = httpResponse.statusCode
-            if let data = data, let body = String(data: data, encoding: .utf8) {
+            if let respData = respData, let body = String(data: respData, encoding: .utf8) {
                 responseBody = body
             }
         }
@@ -176,7 +166,7 @@ private func networkRequestCallback(
 
 /// Claude command callback — handles `claude` commands via ClaudeEngine
 private func claudeCommandCallback(
-    _ sh: ShellPointer?,
+    _ sh: UnsafeMutablePointer<Shell>?,
     _ argc: Int32,
     _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
 ) {
