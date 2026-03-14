@@ -14,7 +14,8 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     @Published var awaitingCode: Bool = false
 
     // Endpoints — exact values from Claude Code source (d2A config object)
-    private let authorizeEndpoint = "https://platform.claude.com/oauth/authorize"
+    // Use claude.ai for Pro/Max users (platform.claude.com is for developer/console billing)
+    private let authorizeEndpoint = "https://claude.ai/oauth/authorize"
     private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
     private let manualRedirectUri = "https://platform.claude.com/oauth/code/callback"
     private let apiKeyEndpoint = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
