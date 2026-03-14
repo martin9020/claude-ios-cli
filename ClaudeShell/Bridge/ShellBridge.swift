@@ -140,6 +140,22 @@ class ShellBridge: ObservableObject {
         return captured
     }
 
+    /// Resolve and validate a path stays within the sandbox
+    private func resolveSandboxPath(_ path: String) -> String? {
+        let fullPath: String
+        if path.hasPrefix("/") {
+            fullPath = sandboxRoot + path
+        } else {
+            fullPath = sandboxRoot + currentDirectory + "/" + path
+        }
+        // Canonicalize to resolve ../ and symlinks, then verify it's within sandbox
+        let canonical = (fullPath as NSString).standardizingPath
+        guard canonical.hasPrefix(sandboxRoot) else {
+            return nil // Path escapes sandbox
+        }
+        return canonical
+    }
+
     /// Execute a tool by name with given input parameters
     func executeTool(_ toolName: String, _ input: [String: Any]) -> String {
         switch toolName {
@@ -155,11 +171,8 @@ class ShellBridge: ObservableObject {
                 return "Error: 'path' parameter required for read_file tool"
             }
             toolProgressCallback?("> Reading: \(path)")
-            let fullPath: String
-            if path.hasPrefix("/") {
-                fullPath = sandboxRoot + path
-            } else {
-                fullPath = sandboxRoot + currentDirectory + "/" + path
+            guard let fullPath = resolveSandboxPath(path) else {
+                return "Error: Path outside sandbox: \(path)"
             }
             if let content = try? String(contentsOfFile: fullPath, encoding: .utf8) {
                 // Limit to 10KB to stay within API limits
@@ -177,11 +190,8 @@ class ShellBridge: ObservableObject {
                 return "Error: 'path' and 'content' parameters required for write_file tool"
             }
             toolProgressCallback?("> Writing: \(path)")
-            let fullPath: String
-            if path.hasPrefix("/") {
-                fullPath = sandboxRoot + path
-            } else {
-                fullPath = sandboxRoot + currentDirectory + "/" + path
+            guard let fullPath = resolveSandboxPath(path) else {
+                return "Error: Path outside sandbox: \(path)"
             }
             // Create parent directories if needed
             let dir = (fullPath as NSString).deletingLastPathComponent
@@ -580,7 +590,11 @@ private func claudeCommandCallback(
         return
     }
 
-    let subcommand = String(cString: argv[1]!)
+    guard let arg1 = argv[1] else {
+        shell_output(sh, "claude: missing subcommand\n")
+        return
+    }
+    let subcommand = String(cString: arg1)
 
     switch subcommand {
     case "config":

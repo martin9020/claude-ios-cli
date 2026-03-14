@@ -13,7 +13,10 @@ class ClaudeEngine {
     static let shared = ClaudeEngine()
 
     private let apiURL = "https://api.anthropic.com/v1/messages"
-    private let model = "claude-sonnet-4-20250514"
+    /// Model ID — reads from UserDefaults (set by SettingsView picker), defaults to Sonnet 4
+    private var model: String {
+        UserDefaults.standard.string(forKey: "model_id") ?? "claude-sonnet-4-6"
+    }
     private(set) var conversationHistory: [[String: Any]] = []
 
     /// Number of messages in history
@@ -129,7 +132,7 @@ class ClaudeEngine {
         request.httpBody = jsonData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(resolvedKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 120
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -223,7 +226,7 @@ class ClaudeEngine {
         request.httpBody = jsonData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(resolvedKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 120
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -279,7 +282,10 @@ class ClaudeEngine {
 
             if !toolUses.isEmpty && !textParts.isEmpty {
                 result = .mixed(text: textParts.joined(separator: "\n"), toolUses: toolUses)
-            } else if !toolUses.isEmpty {
+            } else if toolUses.count > 1 {
+                // Multiple tool uses, no text — use mixed with empty text
+                result = .mixed(text: "", toolUses: toolUses)
+            } else if toolUses.count == 1 {
                 result = .toolUse(id: toolUses[0].id, name: toolUses[0].name, input: toolUses[0].input)
             } else {
                 result = .text(textParts.joined(separator: "\n"))

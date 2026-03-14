@@ -182,7 +182,22 @@ static char *expand_vars(Shell *sh, const char *input) {
     return result;
 }
 
+// Pipe output capture state
+static char _pipe_buf[SHELL_MAX_LINE * 4];
+static int _pipe_len = 0;
+
+static void pipe_capture_fn(const char *text, void *ctx) {
+    (void)ctx;
+    int tlen = strlen(text);
+    if (_pipe_len + tlen < (int)sizeof(_pipe_buf) - 1) {
+        memcpy(_pipe_buf + _pipe_len, text, tlen);
+        _pipe_len += tlen;
+        _pipe_buf[_pipe_len] = '\0';
+    }
+}
+
 // Handle pipes: cmd1 | cmd2
+// Captures left command output and feeds it as a temporary file to the right command
 static int handle_pipe(Shell *sh, const char *line) {
     // Find pipe character (not inside quotes)
     const char *pipe_pos = NULL;
@@ -206,11 +221,84 @@ static int handle_pipe(Shell *sh, const char *line) {
     strncpy(right, pipe_pos + 1, SHELL_MAX_LINE - 1);
     right[SHELL_MAX_LINE - 1] = '\0';
 
+    // Trim whitespace from right command
+    char *rp = right;
+    while (*rp && isspace((unsigned char)*rp)) rp++;
+
     // Capture output of left command
-    // For now, execute sequentially (simplified pipe)
-    // TODO: implement proper pipe with captured output
+    shell_output_fn saved_output = sh->output;
+    void *saved_ctx = sh->output_ctx;
+    _pipe_len = 0;
+    _pipe_buf[0] = '\0';
+    sh->output = pipe_capture_fn;
+    sh->output_ctx = NULL;
+
     shell_exec(sh, left);
-    return shell_exec(sh, right);
+
+    // Restore output
+    sh->output = saved_output;
+    sh->output_ctx = saved_ctx;
+
+    // Write captured output to a temp file for the right command to read.
+    // Use cwd-relative name so text commands (which resolve_path via sh->root/cwd) can find it.
+    char tmpfile[SHELL_MAX_PATH];
+    snprintf(tmpfile, sizeof(tmpfile), "%s%s.pipe_tmp", sh->cwd,
+             sh->cwd[strlen(sh->cwd)-1] == '/' ? "" : "/");
+    // Also compute the relative name for appending to the command
+    static const char *pipe_tmpname = ".pipe_tmp";
+    FILE *fp = fopen(tmpfile, "w");
+    if (fp) {
+        if (_pipe_len > 0) fwrite(_pipe_buf, 1, _pipe_len, fp);
+        fclose(fp);
+    }
+
+    // Build right command with temp file as input arg
+    // For text-processing commands (grep, head, tail, wc, sort, uniq, sed, cut, tr, cat),
+    // append the temp file as the last argument
+    char *right_cmd = rp;
+    char piped_cmd[SHELL_MAX_LINE];
+    // Tokenize just the command name to check
+    char cmd_name[64] = {0};
+    int ci = 0;
+    const char *cp = right_cmd;
+    while (*cp && !isspace((unsigned char)*cp) && ci < 63) {
+        cmd_name[ci++] = *cp++;
+    }
+    cmd_name[ci] = '\0';
+
+    const char *pipe_cmds[] = {"grep","head","tail","wc","sort","uniq","sed","cut","tr","cat",NULL};
+    int is_pipe_cmd = 0;
+    for (const char **pc = pipe_cmds; *pc; pc++) {
+        if (strcmp(cmd_name, *pc) == 0) { is_pipe_cmd = 1; break; }
+    }
+
+    int ret;
+    if (is_pipe_cmd) {
+        snprintf(piped_cmd, sizeof(piped_cmd), "%s %s", right_cmd, pipe_tmpname);
+        ret = shell_exec(sh, piped_cmd);
+    } else {
+        // For other commands, just output the captured text and run the right command
+        shell_printf(sh, "%s", _pipe_buf);
+        ret = shell_exec(sh, right_cmd);
+    }
+
+    // Cleanup temp file
+    remove(tmpfile);
+    return ret;
+}
+
+// Redirect output capture state
+static char _redirect_buf[SHELL_MAX_LINE * 4];
+static int _redirect_len = 0;
+
+static void redirect_capture_fn(const char *text, void *ctx) {
+    (void)ctx;
+    int tlen = strlen(text);
+    if (_redirect_len + tlen < (int)sizeof(_redirect_buf) - 1) {
+        memcpy(_redirect_buf + _redirect_len, text, tlen);
+        _redirect_len += tlen;
+        _redirect_buf[_redirect_len] = '\0';
+    }
 }
 
 // Handle output redirection: cmd > file or cmd >> file
@@ -256,11 +344,32 @@ static int handle_redirect(Shell *sh, char *line) {
     }
 
     // Capture output by temporarily replacing output function
-    // Simplified: just execute and write to file
-    // TODO: proper output capture
-    shell_exec(sh, line);
+    shell_output_fn saved_output = sh->output;
+    void *saved_ctx = sh->output_ctx;
+    _redirect_len = 0;
+    _redirect_buf[0] = '\0';
+    sh->output = redirect_capture_fn;
+    sh->output_ctx = NULL;
 
-    return 0;
+    int ret = shell_exec(sh, line);
+
+    // Restore output
+    sh->output = saved_output;
+    sh->output_ctx = saved_ctx;
+
+    // Write captured output to file
+    FILE *fp = fopen(filepath, append ? "a" : "w");
+    if (fp) {
+        if (_redirect_len > 0) {
+            fwrite(_redirect_buf, 1, _redirect_len, fp);
+        }
+        fclose(fp);
+    } else {
+        shell_printf(sh, "claudeshell: cannot open '%s' for writing\n", filename);
+        return 1;
+    }
+
+    return ret;
 }
 
 // Main execution entry point
@@ -297,6 +406,18 @@ int shell_exec(Shell *sh, const char *line) {
             return shell_exec(sh, or_pos + 2);
         }
         return ret;
+    }
+
+    // Check for output redirection (before pipes, so "cmd | cmd2 > file" works correctly)
+    {
+        int in_s = 0, in_d = 0;
+        for (const char *p = linebuf; *p; p++) {
+            if (*p == '\'' && !in_d) in_s = !in_s;
+            else if (*p == '"' && !in_s) in_d = !in_d;
+            else if (*p == '>' && !in_s && !in_d) {
+                return handle_redirect(sh, linebuf);
+            }
+        }
     }
 
     // Check for pipes

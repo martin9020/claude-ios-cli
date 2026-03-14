@@ -9,6 +9,8 @@ class NpmManager {
     private let registryURL = "https://registry.npmjs.org"
     private var sandboxRoot: String = ""
     private var nodeModulesPath: String { sandboxRoot + "/node_modules" }
+    /// Track packages currently being installed to prevent circular dependency loops
+    private var installingPackages: Set<String> = []
 
     func setup(sandboxRoot: String) {
         self.sandboxRoot = sandboxRoot
@@ -48,12 +50,14 @@ class NpmManager {
 
         switch subcommand {
         case "install", "i":
-            if rest.isEmpty {
+            // Filter out flags like -g, --global, --save, --save-dev
+            let packages = rest.filter { !$0.hasPrefix("-") }
+            if packages.isEmpty {
                 output("npm install: specify a package name\n")
                 output("Usage: npm install <package>\n")
                 return 1
             }
-            return installPackage(name: rest[0], output: output)
+            return installPackage(name: packages[0], output: output)
 
         case "uninstall", "remove", "rm":
             if rest.isEmpty {
@@ -89,15 +93,44 @@ class NpmManager {
     // MARK: - Install
 
     private func installPackage(name: String, output: @escaping (String) -> Void) -> Int32 {
-        // Parse name@version
-        let parts = name.split(separator: "@", maxSplits: 1)
-        let packageName = String(parts[0])
-        let requestedVersion = parts.count > 1 ? String(parts[1]) : "latest"
+        // Cycle detection
+        if installingPackages.contains(name) {
+            return 0 // Already installing, skip
+        }
+        installingPackages.insert(name)
+        defer { installingPackages.remove(name) }
+
+        // Parse name@version, handling scoped packages like @scope/pkg@version
+        let packageName: String
+        let requestedVersion: String
+
+        if name.hasPrefix("@") {
+            // Scoped package: @scope/pkg or @scope/pkg@version
+            let withoutAt = String(name.dropFirst()) // "scope/pkg" or "scope/pkg@1.0"
+            if let atIdx = withoutAt.lastIndex(of: "@"),
+               atIdx > withoutAt.startIndex,
+               withoutAt[withoutAt.startIndex..<atIdx].contains("/") {
+                // Has version: @scope/pkg@1.0
+                packageName = "@" + String(withoutAt[..<atIdx])
+                requestedVersion = String(withoutAt[withoutAt.index(after: atIdx)...])
+            } else {
+                packageName = name
+                requestedVersion = "latest"
+            }
+        } else {
+            let parts = name.split(separator: "@", maxSplits: 1)
+            packageName = String(parts[0])
+            requestedVersion = parts.count > 1 ? String(parts[1]) : "latest"
+        }
 
         output("npm: fetching \(packageName)@\(requestedVersion)...\n")
 
         // 1. Get package metadata from registry
-        guard let metaURL = URL(string: "\(registryURL)/\(packageName)") else {
+        // Scoped packages need URL encoding: @anthropic-ai/claude-code → @anthropic-ai%2Fclaude-code
+        let encodedName = packageName.hasPrefix("@")
+            ? "@" + packageName.dropFirst().replacingOccurrences(of: "/", with: "%2F")
+            : packageName
+        guard let metaURL = URL(string: "\(registryURL)/\(encodedName)") else {
             output("npm ERR! invalid package name\n")
             return 1
         }
@@ -176,6 +209,14 @@ class NpmManager {
 
         // 4. Extract tarball
         let packageDir = nodeModulesPath + "/" + packageName
+
+        // Create scoped directory if needed (e.g., node_modules/@anthropic-ai/)
+        if packageName.hasPrefix("@") && packageName.contains("/") {
+            let scopeDir = nodeModulesPath + "/" + String(packageName.prefix(while: { $0 != "/" }))
+            try? FileManager.default.createDirectory(atPath: scopeDir,
+                                                       withIntermediateDirectories: true)
+        }
+
         output("npm: extracting to node_modules/\(packageName)...\n")
 
         // Remove existing version
@@ -261,7 +302,23 @@ class NpmManager {
             return 0
         }
 
-        let packages = entries.filter { !$0.hasPrefix(".") }
+        var packages: [String] = []
+        let fm = FileManager.default
+
+        for entry in entries where !entry.hasPrefix(".") {
+            if entry.hasPrefix("@") {
+                // Scoped packages — list subdirectories
+                let scopePath = nodeModulesPath + "/" + entry
+                if let scopedPkgs = try? fm.contentsOfDirectory(atPath: scopePath) {
+                    for pkg in scopedPkgs where !pkg.hasPrefix(".") {
+                        packages.append(entry + "/" + pkg)
+                    }
+                }
+            } else {
+                packages.append(entry)
+            }
+        }
+
         if packages.isEmpty {
             output("node_modules/ (empty)\n")
             return 0
@@ -419,32 +476,46 @@ class NpmManager {
         let uncompressedSize = Int(sizeBytes[0]) | (Int(sizeBytes[1]) << 8) |
                                (Int(sizeBytes[2]) << 16) | (Int(sizeBytes[3]) << 24)
 
-        // Use a generous buffer (uncompressedSize might be truncated for large files)
-        let bufferSize = max(uncompressedSize, deflateData.count * 4)
-        var destinationBuffer = [UInt8](repeating: 0, count: bufferSize)
+        // Use a generous buffer — uncompressedSize from gzip trailer is mod 2^32,
+        // so for large packages we need to use a multiplier as fallback.
+        // Start with a reasonable estimate then retry with larger buffer if needed.
+        let initialSize = uncompressedSize > 0 ? max(uncompressedSize, deflateData.count * 4) : deflateData.count * 8
+        var bufferSize = min(initialSize, 256 * 1024 * 1024) // Cap at 256MB
 
-        let decodedSize = deflateData.withUnsafeBytes { srcPtr -> Int in
-            guard let srcBase = srcPtr.baseAddress else { return 0 }
-            return compression_decode_buffer(
-                &destinationBuffer,
-                bufferSize,
-                srcBase.assumingMemoryBound(to: UInt8.self),
-                deflateData.count,
-                nil,
-                COMPRESSION_ZLIB
-            )
+        for attempt in 0..<3 {
+            var destinationBuffer = [UInt8](repeating: 0, count: bufferSize)
+
+            let decodedSize = deflateData.withUnsafeBytes { srcPtr -> Int in
+                guard let srcBase = srcPtr.baseAddress else { return 0 }
+                return compression_decode_buffer(
+                    &destinationBuffer,
+                    bufferSize,
+                    srcBase.assumingMemoryBound(to: UInt8.self),
+                    deflateData.count,
+                    nil,
+                    COMPRESSION_ZLIB
+                )
+            }
+
+            if decodedSize > 0 && decodedSize < bufferSize {
+                return Data(bytes: destinationBuffer, count: decodedSize)
+            }
+
+            // Buffer was too small, try doubling
+            if attempt < 2 {
+                bufferSize = min(bufferSize * 2, 256 * 1024 * 1024)
+            }
         }
 
-        guard decodedSize > 0 else { return nil }
-
-        return Data(bytes: destinationBuffer, count: decodedSize)
+        return nil
     }
 
-    /// Extract tar archive data
+    /// Extract tar archive data (handles POSIX extended headers for long filenames)
     private func extractTar(data: Data, to destDir: String) -> Bool {
         var offset = 0
         var extractedFiles = 0
         let fm = FileManager.default
+        var pendingLongName: String? = nil
 
         while offset + 512 <= data.count {
             // Read tar header (512 bytes)
@@ -457,15 +528,11 @@ class NpmManager {
             let nameData = header.subdata(in: 0..<100)
             var name = String(data: nameData, encoding: .utf8)?.trimmingCharacters(in: .init(charactersIn: "\0")) ?? ""
 
-            // Strip "package/" prefix that npm tarballs use
-            if name.hasPrefix("package/") {
-                name = String(name.dropFirst(8))
-            }
-
-            // Skip empty names
-            if name.isEmpty {
-                offset += 512
-                continue
+            // Check for POSIX extended header prefix (bytes 345-499)
+            let prefixData = header.subdata(in: 345..<500)
+            let prefix = String(data: prefixData, encoding: .utf8)?.trimmingCharacters(in: .init(charactersIn: "\0")) ?? ""
+            if !prefix.isEmpty {
+                name = prefix + "/" + name
             }
 
             // Extract file size (bytes 124-135, octal)
@@ -478,6 +545,56 @@ class NpmManager {
             let typeFlag = header[156]
 
             offset += 512 // Move past header
+
+            // Handle GNU long name extension (type 'L' = 76)
+            if typeFlag == 76 { // GNU LongLink
+                if fileSize > 0 && offset + fileSize <= data.count {
+                    let longNameData = data.subdata(in: offset..<offset + fileSize)
+                    pendingLongName = String(data: longNameData, encoding: .utf8)?
+                        .trimmingCharacters(in: .init(charactersIn: "\0"))
+                }
+                let blocks = (fileSize + 511) / 512
+                offset += blocks * 512
+                continue
+            }
+
+            // Handle pax extended header (type 'x' = 120)
+            if typeFlag == 120 || typeFlag == 88 { // pax header
+                if fileSize > 0 && offset + fileSize <= data.count {
+                    let paxData = data.subdata(in: offset..<offset + fileSize)
+                    if let paxStr = String(data: paxData, encoding: .utf8) {
+                        // Parse pax header for "path" key
+                        for line in paxStr.components(separatedBy: "\n") {
+                            // Format: "length key=value"
+                            if let eqIdx = line.firstIndex(of: "="),
+                               line[line.startIndex..<eqIdx].contains("path") {
+                                pendingLongName = String(line[line.index(after: eqIdx)...])
+                            }
+                        }
+                    }
+                }
+                let blocks = (fileSize + 511) / 512
+                offset += blocks * 512
+                continue
+            }
+
+            // Use long name if pending
+            if let longName = pendingLongName {
+                name = longName
+                pendingLongName = nil
+            }
+
+            // Strip "package/" prefix that npm tarballs use
+            if name.hasPrefix("package/") {
+                name = String(name.dropFirst(8))
+            }
+
+            // Skip empty names
+            if name.isEmpty {
+                let blocks = (fileSize + 511) / 512
+                offset += blocks * 512
+                continue
+            }
 
             let fullPath = destDir + "/" + name
 

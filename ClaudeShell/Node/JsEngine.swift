@@ -9,6 +9,10 @@ class JsEngine {
     private var context: JSContext?
     private var sandboxRoot: String = ""
     private var outputCallback: ((String) -> Void)?
+    /// Track modules currently being loaded to detect circular requires
+    private var loadingModules: Set<String> = []
+    /// Cache loaded modules to avoid reloading
+    private var moduleCache: [String: JSValue] = [:]
 
     /// Initialize the JS engine with a sandbox root directory
     func setup(sandboxRoot: String) {
@@ -40,6 +44,9 @@ class JsEngine {
 
     /// Execute JavaScript source code
     private func execute(source: String, filename: String, cwd: String, args: [String]) -> Int32 {
+        // Reset module tracking for each top-level execution
+        loadingModules.removeAll()
+        moduleCache.removeAll()
         let ctx = JSContext()!
         context = ctx
         var exitCode: Int32 = 0
@@ -121,7 +128,7 @@ class JsEngine {
         return exitCode
     }
 
-    /// Basic require() implementation
+    /// Basic require() implementation with circular dependency protection
     private func requireModule(_ name: String, from cwd: String, ctx: JSContext) -> JSValue {
         // Built-in modules
         switch name {
@@ -134,6 +141,19 @@ class JsEngine {
         default:
             break
         }
+
+        // Check module cache
+        let cacheKey = "\(cwd)/\(name)"
+        if let cached = moduleCache[cacheKey] {
+            return cached
+        }
+
+        // Detect circular requires
+        if loadingModules.contains(cacheKey) {
+            outputCallback?("Warning: Circular require detected for '\(name)'\n")
+            return JSValue(newObjectIn: ctx)!
+        }
+        loadingModules.insert(cacheKey)
 
         // Try to load from node_modules or relative path
         let searchPaths: [String]
@@ -180,7 +200,10 @@ class JsEngine {
                             mainPath
                         ])
                     }
-                    return moduleCtx.objectForKeyedSubscript("exports")!
+                    let result = moduleCtx.objectForKeyedSubscript("exports")!
+                    loadingModules.remove(cacheKey)
+                    moduleCache[cacheKey] = result
+                    return result
                 }
             }
         }
@@ -207,10 +230,14 @@ class JsEngine {
                         path
                     ])
                 }
-                return moduleCtx.objectForKeyedSubscript("exports")!
+                let result = moduleCtx.objectForKeyedSubscript("exports")!
+                loadingModules.remove(cacheKey)
+                moduleCache[cacheKey] = result
+                return result
             }
         }
 
+        loadingModules.remove(cacheKey)
         outputCallback?("Error: Cannot find module '\(name)'\n")
         return JSValue(undefinedIn: ctx)
     }

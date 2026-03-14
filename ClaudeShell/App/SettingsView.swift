@@ -4,7 +4,7 @@ import SafariServices
 struct SettingsView: View {
     @AppStorage("anthropic_api_key") private var apiKey = ""
     @AppStorage("font_size") private var fontSize = 13.0
-    @AppStorage("model_id") private var modelId = "claude-sonnet-4-20250514"
+    @AppStorage("model_id") private var modelId = "claude-sonnet-4-6"
     @Environment(\.dismiss) private var dismiss
     @StateObject private var oauthManager = OAuthManager.shared
     @State private var showSafari = false

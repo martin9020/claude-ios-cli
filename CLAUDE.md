@@ -28,7 +28,7 @@ gcc -o shell_test.exe test_main.c shell.c shell_helpers.c environment.c \
 ./shell_test.exe
 ```
 
-Expected: `19 passed, 0 failed` (or more as tests are added).
+Expected: `22 passed, 0 failed` (or more as tests are added).
 
 If adding new commands, add matching tests in `test_main.c`.
 
@@ -79,9 +79,9 @@ Then install via AltStore or Sideloadly on iPhone.
 - [x] Exit code tracking ($?)
 - [x] Comments (#)
 - [x] Variable assignment (VAR=value, export)
-- [ ] Pipe support (cmd1 | cmd2) — basic structure exists, needs output capture
+- [x] Pipe support (cmd1 | cmd2) — captures left output, feeds to right via temp file
 - [ ] Input redirection (cmd < file)
-- [ ] Output redirection (cmd > file, cmd >> file) — parsed but not wired up
+- [x] Output redirection (cmd > file, cmd >> file) — captures and writes to file
 - [ ] Here documents (<<EOF)
 - [ ] Glob expansion (*.txt)
 - [ ] Command history persistence (save to file)
@@ -97,7 +97,7 @@ Then install via AltStore or Sideloadly on iPhone.
 - [ ] tar/zip/unzip
 - [ ] ssh/scp (via libssh2)
 - [ ] nano/vi (basic text editor)
-- [ ] npm/node (embedded JS runtime — stretch goal)
+- [x] npm/node (JavaScriptCore engine + npm registry install)
 
 ### iOS App (Swift)
 - [x] Terminal emulator with scrollback
@@ -121,9 +121,9 @@ Then install via AltStore or Sideloadly on iPhone.
 - [x] claude status — connection check
 - [x] Conversation history (last 20 messages)
 - [ ] Streaming responses (show tokens as they arrive)
-- [ ] Tool use (let Claude run shell commands autonomously)
-- [ ] claude code — full Claude Code mode (read files, edit, run commands)
-- [ ] Multi-turn context with file awareness
+- [x] Tool use (let Claude run shell commands autonomously) — bash, read_file, write_file
+- [x] claude code — full Claude Code mode (read files, edit, run commands) — agentic loop with 25-iteration cap
+- [x] Multi-turn context with file awareness — auto-reads referenced files
 
 ### Build & Deploy
 - [x] GitHub Actions CI (macOS runner)

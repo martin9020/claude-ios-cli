@@ -182,6 +182,30 @@ TEST(variable_in_braces) {
     ASSERT(output_contains("hello_world"));
 }
 
+TEST(pipe_echo_grep) {
+    // echo outputs "hello\nworld\n", pipe feeds it to grep via temp file
+    shell_exec(sh, "echo hello > /tmp_pipe_test.txt");
+    reset_output();
+    shell_exec(sh, "echo hello | grep hello");
+    ASSERT(output_contains("hello"));
+}
+
+TEST(redirect_write) {
+    shell_exec(sh, "echo redirect_test > redir_out.txt");
+    reset_output();
+    shell_exec(sh, "cat redir_out.txt");
+    ASSERT(output_contains("redirect_test"));
+}
+
+TEST(redirect_append) {
+    shell_exec(sh, "echo line1 > append_test.txt");
+    shell_exec(sh, "echo line2 >> append_test.txt");
+    reset_output();
+    shell_exec(sh, "cat append_test.txt");
+    ASSERT(output_contains("line1"));
+    ASSERT(output_contains("line2"));
+}
+
 int main(void) {
     printf("\n=== ClaudeShell Engine Tests ===\n\n");
 
@@ -229,6 +253,9 @@ int main(void) {
     RUN(comment_ignored);
     RUN(empty_line);
     RUN(variable_in_braces);
+    RUN(pipe_echo_grep);
+    RUN(redirect_write);
+    RUN(redirect_append);
 
     printf("\n=== Results: %d passed, %d failed ===\n\n", passed, failed);
 
