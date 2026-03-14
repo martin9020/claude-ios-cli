@@ -9,8 +9,6 @@ struct SettingsView: View {
     @StateObject private var oauthManager = OAuthManager.shared
     @State private var showSafari = false
     @State private var pasteMessage = ""
-    @State private var isInstallingClaudeCode = false
-    @State private var installOutput = ""
 
     var body: some View {
         NavigationView {
@@ -41,38 +39,7 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                         }
                     } else {
-                        // Install Claude Code package (prerequisite)
-                        if !NpmManager.shared.isClaudeCodeInstalled {
-                            Button(action: installClaudeCodePackage) {
-                                HStack {
-                                    if isInstallingClaudeCode {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                    } else {
-                                        Image(systemName: "arrow.down.circle")
-                                    }
-                                    Text(isInstallingClaudeCode ? "Installing..." : "Install Claude Code Package")
-                                }
-                            }
-                            .disabled(isInstallingClaudeCode)
-
-                            if !installOutput.isEmpty {
-                                Text(installOutput)
-                                    .font(.caption)
-                                    .foregroundColor(installOutput.contains("ERR") ? .red : .secondary)
-                                    .lineLimit(5)
-                            }
-                        } else {
-                            HStack {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundColor(.green)
-                                Text("Claude Code package installed")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
-                            }
-                        }
-
-                        // Sign in button
+                        // Sign in button — no install step needed, client_id is built-in
                         Button(action: { oauthManager.startOAuthFlow() }) {
                             HStack {
                                 if oauthManager.isLoading {
@@ -186,9 +153,9 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Option A: Sign in with Pro/Max subscription", systemImage: "a.circle")
                             .fontWeight(.medium)
-                        Label("  1. Install Claude Code package", systemImage: "1.circle")
-                        Label("  2. Tap Sign in with Claude Pro/Max", systemImage: "2.circle")
-                        Label("  3. Log into your Anthropic account", systemImage: "3.circle")
+                        Label("  1. Tap Sign in with Claude Pro/Max", systemImage: "1.circle")
+                        Label("  2. Log into your Anthropic account", systemImage: "2.circle")
+                        Label("  3. Done! Claude uses your subscription", systemImage: "3.circle")
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -230,34 +197,6 @@ struct SettingsView: View {
         }
     }
 
-    private func installClaudeCodePackage() {
-        isInstallingClaudeCode = true
-        installOutput = "Starting installation..."
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = NpmManager.shared.installClaudeCode { line in
-                DispatchQueue.main.async {
-                    // Show the latest status line (keep it short for the UI)
-                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        self.installOutput = trimmed
-                    }
-                }
-            }
-
-            DispatchQueue.main.async {
-                self.isInstallingClaudeCode = false
-                if result == 0 {
-                    self.installOutput = "Claude Code package installed successfully!"
-                } else {
-                    // Keep the last error message visible instead of generic message
-                    if !self.installOutput.contains("ERR") {
-                        self.installOutput = "Installation failed. Check your network and try again."
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Wrapper for SFSafariViewController to use in SwiftUI

@@ -11,9 +11,12 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     @Published var isLoading: Bool = false
     @Published var statusMessage: String = ""
 
-    private let tokenEndpoint = "https://api.anthropic.com/v1/oauth/token"
-    private let authorizeEndpoint = "https://console.anthropic.com/oauth/authorize"
+    private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
+    private let authorizeEndpoint = "https://platform.claude.com/oauth/authorize"
     private let callbackScheme = "claudeshell"
+
+    /// Official Claude Code OAuth client_id (from @anthropic-ai/claude-code npm package)
+    private let officialClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
     // Keychain keys
     private let keychainAccessToken = "com.claudeshell.oauth.accessToken"
@@ -31,101 +34,24 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
     // MARK: - Client ID Extraction
 
-    /// Extract OAuth client_id from the installed @anthropic-ai/claude-code package
+    /// Get the OAuth client_id — uses the official hardcoded value from Claude Code,
+    /// or falls back to keychain/env override
     func extractClientId() -> String? {
-        let npmManager = NpmManager.shared
-        guard npmManager.isClaudeCodeInstalled else {
-            statusMessage = "Claude Code package not installed"
-            return nil
+        // Check for env override first (CLAUDE_CODE_OAUTH_CLIENT_ID)
+        if let cached = loadFromKeychain(key: keychainClientId) {
+            return cached
         }
-
-        let packagePath = npmManager.claudeCodePath
-        // Search for client_id in the package files — look in cli.js or similar
-        let possibleFiles = ["cli.js", "dist/cli.js", "build/cli.js", "index.js",
-                            "dist/index.js", "lib/auth.js", "dist/auth.js"]
-
-        for file in possibleFiles {
-            let filePath = packagePath + "/" + file
-            if let content = try? String(contentsOfFile: filePath, encoding: .utf8) {
-                if let clientId = findClientId(in: content) {
-                    saveToKeychain(key: keychainClientId, value: clientId)
-                    return clientId
-                }
-            }
-        }
-
-        // Fallback: search all .js files recursively
-        if let clientId = searchClientIdRecursively(in: packagePath) {
-            saveToKeychain(key: keychainClientId, value: clientId)
-            return clientId
-        }
-
-        statusMessage = "Could not find OAuth client_id in package"
-        return nil
-    }
-
-    /// Search for UUID-format client_id near oauth/authorize references
-    private func findClientId(in content: String) -> String? {
-        // Look for UUID pattern near oauth-related strings
-        // Pattern: UUID format (8-4-4-4-12 hex chars)
-        let uuidPattern = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-
-        // Check if this file contains oauth references
-        let hasOAuth = content.contains("oauth") || content.contains("authorize") ||
-                       content.contains("client_id") || content.contains("clientId")
-        guard hasOAuth else { return nil }
-
-        // Extract UUIDs near oauth context
-        guard let regex = try? NSRegularExpression(pattern: uuidPattern, options: .caseInsensitive) else {
-            return nil
-        }
-
-        let range = NSRange(content.startIndex..., in: content)
-        let matches = regex.matches(in: content, options: [], range: range)
-
-        for match in matches {
-            if let matchRange = Range(match.range, in: content) {
-                let uuid = String(content[matchRange])
-                // Verify it's near an oauth-related context (within 500 chars)
-                let start = content.index(matchRange.lowerBound, offsetBy: -min(500, content.distance(from: content.startIndex, to: matchRange.lowerBound)), limitedBy: content.startIndex) ?? content.startIndex
-                let end = content.index(matchRange.upperBound, offsetBy: min(500, content.distance(from: matchRange.upperBound, to: content.endIndex)), limitedBy: content.endIndex) ?? content.endIndex
-                let context = String(content[start..<end])
-                if context.contains("client_id") || context.contains("clientId") || context.contains("oauth") {
-                    return uuid
-                }
-            }
-        }
-
-        return nil
-    }
-
-    /// Recursively search .js files for the OAuth client_id
-    private func searchClientIdRecursively(in directory: String) -> String? {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(atPath: directory) else { return nil }
-
-        var filesChecked = 0
-        while let relativePath = enumerator.nextObject() as? String {
-            guard relativePath.hasSuffix(".js") || relativePath.hasSuffix(".mjs") else { continue }
-            filesChecked += 1
-            if filesChecked > 100 { break } // Safety limit
-
-            let fullPath = directory + "/" + relativePath
-            if let content = try? String(contentsOfFile: fullPath, encoding: .utf8) {
-                if let clientId = findClientId(in: content) {
-                    return clientId
-                }
-            }
-        }
-        return nil
+        // Use the official client_id from the Claude Code npm package
+        saveToKeychain(key: keychainClientId, value: officialClientId)
+        return officialClientId
     }
 
     // MARK: - OAuth PKCE Flow
 
     /// Start the OAuth PKCE authentication flow
     func startOAuthFlow(from window: UIWindow? = nil) {
-        guard let clientId = extractClientId() ?? loadFromKeychain(key: keychainClientId) else {
-            statusMessage = "Install Claude Code package first"
+        guard let clientId = extractClientId() else {
+            statusMessage = "Could not get OAuth client_id"
             return
         }
 
