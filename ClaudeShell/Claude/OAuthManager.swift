@@ -3,8 +3,8 @@ import AuthenticationServices
 import CryptoKit
 import Security
 
-/// Manages OAuth PKCE authentication with Anthropic for Claude Pro/Max subscriptions.
-/// Implements the exact same OAuth flow as Claude Code CLI (from source).
+/// OAuth PKCE auth for Claude Pro/Max subscriptions.
+/// Flow: claude.ai authorize → get code → exchange for token → use as Bearer.
 class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = OAuthManager()
 
@@ -13,340 +13,212 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     @Published var statusMessage: String = ""
     @Published var awaitingCode: Bool = false
 
-    // Endpoints — exact values from Claude Code source (d2A config object)
-    // Use claude.ai for Pro/Max users (platform.claude.com is for developer/console billing)
+    // Claude Code source endpoints
     private let authorizeEndpoint = "https://claude.ai/oauth/authorize"
     private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
-    private let manualRedirectUri = "https://platform.claude.com/oauth/code/callback"
-    private let apiKeyEndpoint = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
     private let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    private let redirectUri = "https://platform.claude.com/oauth/code/callback"
 
-    // Full scopes from Claude Code source (ed1 array)
-    private let scopes = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+    // Pro/Max scopes — user:inference for API access
+    private let scopes = "user:inference user:profile user:sessions:claude_code"
 
-    // Keychain keys
-    private let keychainAccessToken = "com.claudeshell.oauth.accessToken"
-    private let keychainRefreshToken = "com.claudeshell.oauth.refreshToken"
-    private let keychainTokenExpiry = "com.claudeshell.oauth.tokenExpiry"
+    // Keychain
+    private let kAccessToken = "com.claudeshell.oauth.accessToken"
+    private let kRefreshToken = "com.claudeshell.oauth.refreshToken"
+    private let kTokenExpiry = "com.claudeshell.oauth.tokenExpiry"
 
-    // PKCE state
     private var codeVerifier: String?
     private var oauthState: String?
 
     override init() {
         super.init()
-        isSignedIn = loadFromKeychain(key: keychainAccessToken) != nil
+        isSignedIn = loadKeychain(kAccessToken) != nil
     }
 
-    // MARK: - OAuth Flow (matches Claude Code CLI buildAuthUrl + by8 functions)
+    // MARK: - Public API
+
+    /// Get the current OAuth token (refreshes if expired)
+    func getToken() -> String? {
+        guard let token = loadKeychain(kAccessToken) else { return nil }
+        if isExpired() {
+            var refreshed: String?
+            let sem = DispatchSemaphore(value: 0)
+            doRefresh { refreshed = $0; sem.signal() }
+            sem.wait()
+            return refreshed
+        }
+        return token
+    }
+
+    /// Whether we have an OAuth token (vs API key)
+    var hasOAuthToken: Bool {
+        loadKeychain(kAccessToken) != nil && isSignedIn
+    }
+
+    // MARK: - OAuth Flow
 
     func startOAuthFlow(from window: UIWindow? = nil) {
         isLoading = true
         statusMessage = "Opening login..."
 
-        // Generate PKCE values
-        let verifier = generateCodeVerifier()
-        self.codeVerifier = verifier
-        let challenge = generateCodeChallenge(from: verifier)
-        let state = generateCodeVerifier()
-        self.oauthState = state
+        let verifier = randomBase64URL()
+        codeVerifier = verifier
+        let challenge = sha256Base64URL(verifier)
+        let state = randomBase64URL()
+        oauthState = state
 
-        // Build authorize URL — use URLComponents with queryItems.
-        // This is the standard Swift approach and produces valid URLs.
-        var components = URLComponents(string: authorizeEndpoint)!
-        components.queryItems = [
+        var c = URLComponents(string: authorizeEndpoint)!
+        c.queryItems = [
             URLQueryItem(name: "code", value: "true"),
             URLQueryItem(name: "client_id", value: clientId),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "redirect_uri", value: manualRedirectUri),
+            URLQueryItem(name: "redirect_uri", value: redirectUri),
             URLQueryItem(name: "scope", value: scopes),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state)
         ]
 
-        guard let authURL = components.url else {
-            statusMessage = "Failed to build auth URL"
+        guard let url = c.url else {
+            statusMessage = "Failed to build URL"
             isLoading = false
             return
         }
 
-        // Open in browser — use a callback scheme that won't match anything
-        // so the user stays on the page and sees the auth code to copy
-        let session = ASWebAuthenticationSession(
-            url: authURL,
-            callbackURLScheme: "claudeshell-none"
-        ) { [weak self] _, _ in
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "claudeshell-none") { [weak self] _, _ in
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.isLoading = false
-                self.awaitingCode = true
-                self.statusMessage = "Paste the authorization code from the browser"
+                self?.isLoading = false
+                self?.awaitingCode = true
+                self?.statusMessage = "Paste the code from the browser"
             }
         }
-
         session.presentationContextProvider = self
-        // Share cookies with Safari — allows auto-login if already signed in
         session.prefersEphemeralWebBrowserSession = false
         session.start()
     }
 
-    /// Called when user pastes the authorization code
-    func submitAuthCode(_ code: String) {
-        let cleanCode = extractCode(from: code)
-        guard !cleanCode.isEmpty else {
-            statusMessage = "Please enter a valid code"
-            return
+    func submitAuthCode(_ input: String) {
+        // Extract code — strip URL fragment (#...) and query params
+        var code = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if code.contains("code=") {
+            if let r = code.range(of: "code=") {
+                code = String(code[r.upperBound...])
+                if let a = code.firstIndex(of: "&") { code = String(code[..<a]) }
+            }
         }
-        guard codeVerifier != nil else {
-            statusMessage = "Auth session expired — tap Sign In again"
-            return
-        }
+        if let h = code.firstIndex(of: "#") { code = String(code[..<h]) }
+        code = code.removingPercentEncoding ?? code
+        code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !code.isEmpty else { statusMessage = "Empty code"; return }
+        guard codeVerifier != nil else { statusMessage = "Session expired — sign in again"; return }
 
         isLoading = true
         awaitingCode = false
-        // Show the cleaned code length for debugging
-        statusMessage = "Exchanging code (\(cleanCode.count) chars)..."
-        exchangeCodeForTokens(code: cleanCode)
+        statusMessage = "Exchanging code (\(code.count) chars)..."
+        exchangeCode(code)
     }
 
-    /// Extract the authorization code from whatever the user pasted.
-    /// The callback URL format is: ...?code=XXXXX#fragment
-    /// The # separates the code from a URL fragment — only the part before # is the code.
-    private func extractCode(from input: String) -> String {
-        var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // If it's a full URL with code= parameter, extract the code value
-        if text.contains("code=") {
-            if let range = text.range(of: "code=") {
-                text = String(text[range.upperBound...])
-                // Stop at & (next param) or end
-                if let ampRange = text.range(of: "&") {
-                    text = String(text[..<ampRange.lowerBound])
-                }
-            }
-        }
-
-        // Strip URL fragment (#...) — the part after # is NOT part of the auth code
-        if let hashIndex = text.firstIndex(of: "#") {
-            text = String(text[..<hashIndex])
-        }
-
-        // URL-decode if needed
-        text = text.removingPercentEncoding ?? text
-
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    func signOut() {
+        deleteKeychain(kAccessToken)
+        deleteKeychain(kRefreshToken)
+        deleteKeychain(kTokenExpiry)
+        codeVerifier = nil
+        oauthState = nil
+        isSignedIn = false
+        awaitingCode = false
+        UserDefaults.standard.set("", forKey: "anthropic_api_key")
+        statusMessage = "Signed out"
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
-            .first(where: { $0.isKeyWindow }) ?? ASPresentationAnchor()
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
     }
 
-    // MARK: - Token Exchange (exact copy of Claude Code's by8 function)
-    // Source: X8.post(P7().TOKEN_URL, w, {headers:{"Content-Type":"application/json"}, timeout:15000})
+    // MARK: - Token Exchange
 
-    private func exchangeCodeForTokens(code: String) {
-        guard let verifier = codeVerifier, let state = oauthState else {
-            statusMessage = "Missing PKCE state"
+    private func exchangeCode(_ code: String) {
+        guard let verifier = codeVerifier, let state = oauthState,
+              let url = URL(string: tokenEndpoint) else {
+            statusMessage = "Missing auth state"
             isLoading = false
             return
         }
 
-        guard let url = URL(string: tokenEndpoint) else {
-            statusMessage = "Invalid token endpoint"
-            isLoading = false
-            return
-        }
-
-        // Exact body from by8(): {grant_type, code, redirect_uri, client_id, code_verifier, state}
         let body: [String: String] = [
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": manualRedirectUri,
+            "redirect_uri": redirectUri,
             "client_id": clientId,
             "code_verifier": verifier,
             "state": state
         ]
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.isLoading = false
-
-                if let error = error {
-                    self.statusMessage = "Network error: \(error.localizedDescription)"
-                    return
-                }
-
-                let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
-
-                guard let data = data else {
-                    self.statusMessage = "No response (HTTP \(httpStatus))"
-                    return
-                }
-
-                // Try to parse response
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    let raw = String(data: data, encoding: .utf8) ?? "binary"
-                    self.statusMessage = "Bad response (HTTP \(httpStatus)): \(String(raw.prefix(200)))"
-                    return
-                }
-
-                // Check for errors — Anthropic format: {error: {type, message}}
-                if let errorDict = json["error"] as? [String: Any],
-                   let message = errorDict["message"] as? String {
-                    self.statusMessage = "Auth error: \(message)"
-                    // Don't clear verifier — user can try again with new code
-                    self.awaitingCode = true
-                    return
-                }
-                if let errorStr = json["error"] as? String {
-                    let desc = json["error_description"] as? String ?? errorStr
-                    self.statusMessage = "Auth error: \(desc)"
-                    self.awaitingCode = true
-                    return
-                }
-
-                // Check for HTTP error
-                if httpStatus != 200 {
-                    self.statusMessage = "HTTP \(httpStatus): \(json)"
-                    self.awaitingCode = true
-                    return
-                }
-
-                // Success — extract OAuth tokens
-                guard let accessToken = json["access_token"] as? String else {
-                    let keys = json.keys.joined(separator: ", ")
-                    self.statusMessage = "No access_token in response (keys: \(keys))"
-                    return
-                }
-
-                // Clear PKCE state
-                self.codeVerifier = nil
-                self.oauthState = nil
-
-                // Store OAuth tokens for refresh
-                if let refresh = json["refresh_token"] as? String {
-                    self.saveToKeychain(key: self.keychainRefreshToken, value: refresh)
-                }
-                let expiresIn = json["expires_in"] as? Int ?? 28800
-                let expiry = Date().addingTimeInterval(TimeInterval(expiresIn)).timeIntervalSince1970
-                self.saveToKeychain(key: self.keychainTokenExpiry,
-                                   value: String(format: "%.0f", expiry))
-
-                // Now exchange OAuth token for an actual API key
-                // (Anthropic API doesn't accept OAuth tokens directly)
-                self.statusMessage = "Creating API key..."
-                self.createApiKey(oauthToken: accessToken)
-            }
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+            DispatchQueue.main.async { self?.handleTokenResponse(data, resp, err) }
         }.resume()
     }
 
-    // MARK: - API Key Creation (exact copy of Claude Code's uy8 function)
-    // Source: X8.post(P7().API_KEY_URL, null, {headers:{Authorization:`Bearer ${A}`}})
+    private func handleTokenResponse(_ data: Data?, _ resp: URLResponse?, _ err: Error?) {
+        isLoading = false
 
-    private func createApiKey(oauthToken: String) {
-        guard let url = URL(string: apiKeyEndpoint) else {
-            statusMessage = "Invalid API key endpoint"
-            isLoading = false
+        if let err = err { statusMessage = "Network: \(err.localizedDescription)"; return }
+
+        guard let data = data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            statusMessage = "Bad response"
             return
         }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(oauthToken)", forHTTPHeaderField: "Authorization")
-        // No Content-Type — source sends null body (no body at all)
-        request.timeoutInterval = 15
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.isLoading = false
-
-                if let error = error {
-                    self.statusMessage = "API key error: \(error.localizedDescription)"
-                    return
-                }
-
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "no data"
-                    self.statusMessage = "API key error: \(String(raw.prefix(200)))"
-                    return
-                }
-
-                // Check for error
-                if let errorDict = json["error"] as? [String: Any],
-                   let message = errorDict["message"] as? String {
-                    self.statusMessage = "API key error: \(message)"
-                    return
-                }
-
-                // Extract the raw API key
-                guard let rawKey = json["raw_key"] as? String else {
-                    let keys = json.keys.joined(separator: ", ")
-                    self.statusMessage = "No raw_key in response (keys: \(keys))"
-                    return
-                }
-
-                // Store the API key — this is what the Claude API accepts
-                self.saveToKeychain(key: self.keychainAccessToken, value: rawKey)
-                // Store OAuth bearer token for future refresh
-                self.saveToKeychain(key: "com.claudeshell.oauth.bearerToken", value: oauthToken)
-                // Clear any manual API key so OAuth key is used
-                UserDefaults.standard.set("", forKey: "anthropic_api_key")
-
-                self.isSignedIn = true
-                self.statusMessage = "Signed in! Key: \(String(rawKey.prefix(12)))..."
-            }
-        }.resume()
-    }
-
-    // MARK: - Token Refresh (exact copy of Claude Code's QQ6 function)
-    // Source: X8.post(P7().TOKEN_URL, K, {headers:{"Content-Type":"application/json"}, timeout:15000})
-
-    func getToken() -> String? {
-        guard let token = loadFromKeychain(key: keychainAccessToken) else { return nil }
-        if isTokenExpired() {
-            let semaphore = DispatchSemaphore(value: 0)
-            var refreshedToken: String?
-            refreshToken { newToken in
-                refreshedToken = newToken
-                semaphore.signal()
-            }
-            semaphore.wait()
-            return refreshedToken
+        if let e = json["error"] as? [String: Any], let m = e["message"] as? String {
+            statusMessage = "Error: \(m)"; awaitingCode = true; return
         }
-        return token
+        if let e = json["error"] as? String {
+            statusMessage = "Error: \(json["error_description"] as? String ?? e)"; awaitingCode = true; return
+        }
+
+        guard let token = json["access_token"] as? String else {
+            statusMessage = "No access_token"; return
+        }
+
+        // Store OAuth token directly — used as Bearer token for API calls
+        codeVerifier = nil
+        oauthState = nil
+        saveKeychain(kAccessToken, token)
+
+        if let refresh = json["refresh_token"] as? String {
+            saveKeychain(kRefreshToken, refresh)
+        }
+        let exp = json["expires_in"] as? Int ?? 28800
+        saveKeychain(kTokenExpiry, String(format: "%.0f", Date().addingTimeInterval(TimeInterval(exp)).timeIntervalSince1970))
+
+        isSignedIn = true
+        statusMessage = "Signed in successfully!"
     }
 
-    private func isTokenExpired() -> Bool {
-        guard let expiryStr = loadFromKeychain(key: keychainTokenExpiry),
-              let expiry = Double(expiryStr) else { return true }
-        return Date().timeIntervalSince1970 > (expiry - 300)
+    // MARK: - Token Refresh
+
+    private func isExpired() -> Bool {
+        guard let s = loadKeychain(kTokenExpiry), let e = Double(s) else { return true }
+        return Date().timeIntervalSince1970 > (e - 300)
     }
 
-    func refreshToken(completion: @escaping (String?) -> Void) {
-        guard let refresh = loadFromKeychain(key: keychainRefreshToken),
+    private func doRefresh(completion: @escaping (String?) -> Void) {
+        guard let refresh = loadKeychain(kRefreshToken),
               let url = URL(string: tokenEndpoint) else {
-            DispatchQueue.main.async {
-                self.isSignedIn = false
-                self.statusMessage = "Session expired — please sign in again"
-            }
-            completion(nil)
-            return
+            DispatchQueue.main.async { self.isSignedIn = false; self.statusMessage = "Session expired" }
+            completion(nil); return
         }
 
-        // Exact body from QQ6(): {grant_type, refresh_token, client_id, scope}
         let body: [String: String] = [
             "grant_type": "refresh_token",
             "refresh_token": refresh,
@@ -354,104 +226,64 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
             "scope": scopes
         ]
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
-            guard let self = self else { completion(nil); return }
-
-            guard error == nil, let data = data,
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self = self, let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let newToken = json["access_token"] as? String else {
-                DispatchQueue.main.async {
-                    self.isSignedIn = false
-                    self.statusMessage = "Token refresh failed — please sign in again"
-                }
-                completion(nil)
-                return
+                  let token = json["access_token"] as? String else {
+                DispatchQueue.main.async { self?.isSignedIn = false; self?.statusMessage = "Refresh failed" }
+                completion(nil); return
             }
-
-            self.saveToKeychain(key: self.keychainAccessToken, value: newToken)
-            if let newRefresh = json["refresh_token"] as? String {
-                self.saveToKeychain(key: self.keychainRefreshToken, value: newRefresh)
-            }
-            let expiresIn = json["expires_in"] as? Int ?? 28800
-            let expiry = Date().addingTimeInterval(TimeInterval(expiresIn)).timeIntervalSince1970
-            self.saveToKeychain(key: self.keychainTokenExpiry,
-                               value: String(format: "%.0f", expiry))
+            self.saveKeychain(self.kAccessToken, token)
+            if let r = json["refresh_token"] as? String { self.saveKeychain(self.kRefreshToken, r) }
+            let exp = json["expires_in"] as? Int ?? 28800
+            self.saveKeychain(self.kTokenExpiry, String(format: "%.0f", Date().addingTimeInterval(TimeInterval(exp)).timeIntervalSince1970))
             DispatchQueue.main.async { self.isSignedIn = true }
-            completion(newToken)
+            completion(token)
         }.resume()
     }
 
-    func signOut() {
-        deleteFromKeychain(key: keychainAccessToken)
-        deleteFromKeychain(key: keychainRefreshToken)
-        deleteFromKeychain(key: keychainTokenExpiry)
-        codeVerifier = nil
-        oauthState = nil
-        isSignedIn = false
-        awaitingCode = false
-        statusMessage = "Signed out"
+    // MARK: - Crypto
+
+    private func randomBase64URL() -> String {
+        var b = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &b)
+        return Data(b).base64URLEncoded()
     }
 
-    // MARK: - PKCE Helpers
-
-    private func generateCodeVerifier() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return Data(bytes).base64URLEncoded()
-    }
-
-    private func generateCodeChallenge(from verifier: String) -> String {
-        let hash = SHA256.hash(data: Data(verifier.utf8))
-        return Data(hash).base64URLEncoded()
+    private func sha256Base64URL(_ input: String) -> String {
+        Data(SHA256.hash(data: Data(input.utf8))).base64URLEncoded()
     }
 
     // MARK: - Keychain
 
-    private func saveToKeychain(key: String, value: String) {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-        ]
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+    private func saveKeychain(_ key: String, _ value: String) {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: key,
+                                 kSecValueData as String: Data(value.utf8), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock]
+        SecItemDelete(q as CFDictionary)
+        SecItemAdd(q as CFDictionary, nil)
     }
 
-    private func loadFromKeychain(key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+    private func loadKeychain(_ key: String) -> String? {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: key,
+                                 kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var r: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &r) == errSecSuccess, let d = r as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
     }
 
-    private func deleteFromKeychain(key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(query as CFDictionary)
+    private func deleteKeychain(_ key: String) {
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: key] as CFDictionary)
     }
 }
 
 extension Data {
     func base64URLEncoded() -> String {
-        base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
     }
 }
