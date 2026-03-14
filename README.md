@@ -4,7 +4,7 @@ A terminal app for iPhone that brings Claude Code to your pocket. Run shell comm
 
 > **Like this project?** Support development:
 >
-> **ETH:** `0x753D2C9553A405f3CFfCCD6E3217aac8b83296d5`
+> **ETH:** `0x16063B989a586D6E491D7069960bA8108d2aE1FD`
 >
 > **BTC:** `bc1qupe3py742jgxfk6tp9p5rc7uvh5meqrvegxhcd`
 
