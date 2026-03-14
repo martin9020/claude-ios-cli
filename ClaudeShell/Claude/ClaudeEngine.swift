@@ -64,17 +64,9 @@ class ClaudeEngine {
         """
 
         if withTools {
-            prompt += """
-
-        TOOLS: You have bash, read_file, write_file.
-        Use them autonomously to complete tasks. Prefer write_file over echo > for creating files.
-        Be concise — this is a mobile screen.
-            """
+            prompt += "\nTOOLS: You have bash, read_file, write_file. Use them autonomously. Prefer write_file over echo > for creating files. Be concise — mobile screen."
         } else {
-            prompt += """
-
-        Be concise — mobile screen. Show exact commands. Infer intent from context.
-            """
+            prompt += "\nBe concise — mobile screen. Show exact commands. Infer intent from context."
         }
 
         return prompt
