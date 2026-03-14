@@ -176,15 +176,20 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                     return
                 }
 
+                // Handle errors — Anthropic returns {type, error: {type, message}, request_id}
+                if let errorDict = json["error"] as? [String: Any],
+                   let message = errorDict["message"] as? String {
+                    self.statusMessage = "Auth error: \(message)"
+                    return
+                }
                 if let errorMsg = json["error_description"] as? String ?? json["error"] as? String {
                     self.statusMessage = "Auth error: \(errorMsg)"
                     return
                 }
 
                 guard let accessToken = json["access_token"] as? String else {
-                    // Show what we actually got for debugging
-                    let keys = json.keys.joined(separator: ", ")
-                    self.statusMessage = "No access_token. Response keys: \(keys)"
+                    let raw = String(data: data, encoding: .utf8) ?? "unknown"
+                    self.statusMessage = "Failed: \(String(raw.prefix(300)))"
                     return
                 }
 
