@@ -24,3 +24,6 @@ project.yml
 .env
 *.p12
 *.mobileprovision
+
+# Claude Code local settings
+.claude/
