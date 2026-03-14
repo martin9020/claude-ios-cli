@@ -304,15 +304,12 @@ struct TerminalView: View {
 
         // Execute on background thread
         DispatchQueue.global(qos: .userInitiated).async {
-            // Clear output buffer before executing
+            // Clear and execute — output goes to captureBuffer synchronously
             self.shell.clearOutput()
-
-            // Execute command
             self.shell.execute(command)
 
-            // Capture output
-            let output = self.shell.outputBuffer
-            self.shell.clearOutput()
+            // Flush captured output (written by C callbacks on this same thread)
+            let output = self.shell.flushOutput()
 
             DispatchQueue.main.async {
                 if !output.isEmpty {

@@ -10,6 +10,10 @@ class ShellBridge: ObservableObject {
     @Published var isRunning: Bool = true
     @Published var claudeMode: Bool = false
 
+    /// Thread-safe capture buffer — written directly by C callbacks (no dispatch)
+    /// Used by TerminalView to read command output synchronously after execute()
+    private var captureBuffer: String = ""
+
     /// Callback for live tool execution progress (set by TerminalView)
     var toolProgressCallback: ((String) -> Void)?
 
@@ -93,18 +97,22 @@ class ShellBridge: ObservableObject {
         return String(cString: shell_get_cwd(shell))
     }
 
-    /// Append text to output buffer (called from C callback)
+    /// Append text to output buffer (called from C callback on same thread as execute)
     func appendOutput(_ text: String) {
-        DispatchQueue.main.async {
-            self.outputBuffer += text
-        }
+        // Write to capture buffer directly (same thread as shell_exec)
+        captureBuffer += text
     }
 
-    /// Clear output buffer
+    /// Clear capture buffer and return its contents
+    func flushOutput() -> String {
+        let output = captureBuffer
+        captureBuffer = ""
+        return output
+    }
+
+    /// Clear output buffer (legacy)
     func clearOutput() {
-        DispatchQueue.main.async {
-            self.outputBuffer = ""
-        }
+        captureBuffer = ""
     }
 
     // MARK: - Tool Execution (Phase 2: Autonomous)
@@ -113,29 +121,20 @@ class ShellBridge: ObservableObject {
     func executeAndCapture(_ command: String) -> String {
         guard let shell = shell else { return "Error: shell not initialized\n" }
 
-        // Save and clear the buffer
-        let savedBuffer = outputBuffer
-        DispatchQueue.main.sync {
-            self.outputBuffer = ""
-        }
+        // Save and clear the capture buffer
+        let savedBuffer = captureBuffer
+        captureBuffer = ""
 
-        // Execute
+        // Execute — C callbacks write to captureBuffer synchronously
         let _ = shell_exec(shell, command)
 
-        // Reset running if needed
         if shell_is_running(shell) == 0 {
             shell_reset_running(shell)
         }
 
-        // Small delay for output callback
-        Thread.sleep(forTimeInterval: 0.05)
-
-        // Capture output
-        var captured = ""
-        DispatchQueue.main.sync {
-            captured = self.outputBuffer
-            self.outputBuffer = savedBuffer
-        }
+        // Get captured output and restore
+        let captured = captureBuffer
+        captureBuffer = savedBuffer
 
         return captured
     }
