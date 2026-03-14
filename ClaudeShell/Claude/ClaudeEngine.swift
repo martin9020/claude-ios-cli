@@ -50,7 +50,7 @@ class ClaudeEngine {
         SHELL COMMANDS AVAILABLE:
         Filesystem: ls [-la], cat, cp, mv, rm, mkdir, touch, pwd, cd, find [-name] [-type], chmod, du [-h], ln
         Text: grep [-i][-n][-c][-v][-r], head [-n], tail [-n], wc [-l][-w][-c], sort [-r], uniq [-c][-d], sed 's/find/replace/[g]', tr [-d][-s] 'set1' 'set2', cut -d<delim> -f<fields> [-c<range>], diff
-        System: echo [-n][-e], env, export, which, clear, exit, help, date, sleep, test [-f][-d][-z][-n], basename, dirname, true, false
+        System: echo [-n][-e], env, export, which, clear, exit, help, date, sleep, test [-f][-d][-z][-n], basename, dirname, true, false, serve, base64, whoami, uptime, open
         Network: curl [-X method] [-d data] <url>, wget [-O file] <url>
         Node.js: node <file.js>, node -e "code", npm install/list/run/init
         Shell: VAR=val, $VAR, ${VAR}, &&, ||, |, >, >>, "quotes", 'quotes', #comments

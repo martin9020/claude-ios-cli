@@ -22,4 +22,8 @@ typedef void (*node_handler_fn)(Shell *sh, int argc, char **argv);
 void shell_set_node_handler(node_handler_fn handler);
 void shell_set_npm_handler(node_handler_fn handler);
 
+// Serve handler registration (from cmd_system.c)
+typedef void (*serve_handler_fn)(Shell *sh, int argc, char **argv);
+void shell_set_serve_handler(serve_handler_fn handler);
+
 #endif

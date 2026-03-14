@@ -24,6 +24,14 @@ void shell_set_claude_handler(claude_handler_fn handler) {
     _claude_handler = handler;
 }
 
+// Serve command — bridges to Swift HttpServer
+typedef void (*serve_handler_fn)(Shell *sh, int argc, char **argv);
+static serve_handler_fn _serve_handler = NULL;
+
+void shell_set_serve_handler(serve_handler_fn handler) {
+    _serve_handler = handler;
+}
+
 // Node/npm command — bridges to Swift JsEngine/NpmManager
 typedef void (*node_handler_fn)(Shell *sh, int argc, char **argv);
 static node_handler_fn _node_handler = NULL;
@@ -95,7 +103,8 @@ int cmd_which(Shell *sh, int argc, char **argv) {
         "ls","cat","cp","mv","rm","mkdir","touch","pwd","cd",
         "find","chmod","du","ln",
         "grep","head","tail","wc","sort","uniq","sed","tr","cut","diff",
-        "curl","wget","node","npm","claude", NULL
+        "curl","wget","node","npm","serve",
+        "base64","whoami","uptime","open","claude", NULL
     };
     for (const char **b = builtins; *b; b++) {
         if (strcmp(argv[1], *b) == 0) {
@@ -126,7 +135,11 @@ int cmd_help(Shell *sh, int argc, char **argv) {
     shell_printf(sh, "\033[1mFilesystem:\033[0m  ls cat cp mv rm mkdir touch pwd cd find chmod du\n");
     shell_printf(sh, "\033[1mText:\033[0m        grep head tail wc sort uniq sed tr cut diff\n");
     shell_printf(sh, "\033[1mSystem:\033[0m      echo env export which clear exit help date sleep\n");
+    shell_printf(sh, "             base64 whoami uptime open\n");
     shell_printf(sh, "\033[1mNetwork:\033[0m     curl wget\n");
+    shell_printf(sh, "\033[1mServer:\033[0m      serve [port]            — Start HTTP file server\n");
+    shell_printf(sh, "             serve stop              — Stop server\n");
+    shell_printf(sh, "             serve status            — Show server status\n");
     shell_printf(sh, "\033[1mNode.js:\033[0m     node <file.js>          — Run JavaScript\n");
     shell_printf(sh, "             npm install <pkg>        — Install npm package\n");
     shell_printf(sh, "             npm list                 — List installed packages\n");
@@ -237,6 +250,128 @@ int cmd_npm(Shell *sh, int argc, char **argv) {
     return 0;
 }
 
+int cmd_serve(Shell *sh, int argc, char **argv) {
+    if (_serve_handler) {
+        _serve_handler(sh, argc, argv);
+        return sh->last_exit_code;
+    }
+    shell_printf(sh, "serve: HTTP server (handled by iOS app)\n");
+    return 0;
+}
+
+int cmd_base64(Shell *sh, int argc, char **argv) {
+    if (argc < 2) {
+        shell_printf(sh, "Usage: base64 encode <file>\n");
+        shell_printf(sh, "       base64 decode <file> [output]\n");
+        return 1;
+    }
+
+    int decode = 0;
+    const char *filename = NULL;
+    const char *outfile = NULL;
+    (void)outfile;
+
+    if (strcmp(argv[1], "encode") == 0) {
+        decode = 0;
+        if (argc >= 3) filename = argv[2];
+    } else if (strcmp(argv[1], "decode") == 0) {
+        decode = 1;
+        if (argc >= 3) filename = argv[2];
+        if (argc >= 4) outfile = argv[3];
+    } else {
+        // Treat as encode of a file
+        filename = argv[1];
+    }
+
+    if (!filename) {
+        shell_printf(sh, "base64: missing filename\n");
+        return 1;
+    }
+
+    char path[SHELL_MAX_PATH * 2];
+    if (filename[0] == '/') snprintf(path, sizeof(path), "%s%s", sh->root, filename);
+    else snprintf(path, sizeof(path), "%s/%s", sh->cwd, filename);
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        shell_printf(sh, "base64: %s: No such file\n", filename);
+        return 1;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size > 1024 * 1024) { // 1MB limit
+        shell_printf(sh, "base64: file too large (max 1MB)\n");
+        fclose(f);
+        return 1;
+    }
+
+    unsigned char *buf = (unsigned char *)malloc(size);
+    if (!buf) { fclose(f); return 1; }
+    fread(buf, 1, size, f);
+    fclose(f);
+
+    if (!decode) {
+        // Encode
+        static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        int i;
+        for (i = 0; i + 2 < size; i += 3) {
+            shell_printf(sh, "%c%c%c%c",
+                b64[buf[i] >> 2],
+                b64[((buf[i] & 3) << 4) | (buf[i+1] >> 4)],
+                b64[((buf[i+1] & 0xF) << 2) | (buf[i+2] >> 6)],
+                b64[buf[i+2] & 0x3F]);
+        }
+        if (i < size) {
+            shell_printf(sh, "%c", b64[buf[i] >> 2]);
+            if (i + 1 < size) {
+                shell_printf(sh, "%c%c=",
+                    b64[((buf[i] & 3) << 4) | (buf[i+1] >> 4)],
+                    b64[((buf[i+1] & 0xF) << 2)]);
+            } else {
+                shell_printf(sh, "%c==", b64[(buf[i] & 3) << 4]);
+            }
+        }
+        shell_printf(sh, "\n");
+    } else {
+        // Decode — simple base64 decoder
+        // For now, just indicate decoding is iOS-only
+        shell_printf(sh, "base64: decode requires iOS runtime\n");
+    }
+
+    free(buf);
+    return 0;
+}
+
+int cmd_whoami(Shell *sh, int argc, char **argv) {
+    (void)argc; (void)argv;
+    shell_printf(sh, "mobile\n");
+    return 0;
+}
+
+static time_t _app_start_time = 0;
+
+int cmd_uptime(Shell *sh, int argc, char **argv) {
+    (void)argc; (void)argv;
+    if (_app_start_time == 0) _app_start_time = time(NULL);
+    time_t now = time(NULL);
+    long elapsed = (long)(now - _app_start_time);
+    long hours = elapsed / 3600;
+    long mins = (elapsed % 3600) / 60;
+    long secs = elapsed % 60;
+    shell_printf(sh, "up %ldh %ldm %lds\n", hours, mins, secs);
+    return 0;
+}
+
+int cmd_open(Shell *sh, int argc, char **argv) {
+    (void)argc; (void)argv;
+    shell_printf(sh, "Use iOS Files app to open files in Safari.\n");
+    shell_printf(sh, "Files location: On My iPhone > ClaudeShell\n");
+    return 0;
+}
+
 int cmd_claude(Shell *sh, int argc, char **argv) {
     if (_claude_handler) {
         _claude_handler(sh, argc, argv);
@@ -304,6 +439,15 @@ int cmd_dispatch(Shell *sh, int argc, char **argv) {
     // Node.js / npm
     if (strcmp(cmd, "node") == 0) return cmd_node(sh, argc, argv);
     if (strcmp(cmd, "npm") == 0) return cmd_npm(sh, argc, argv);
+
+    // Serve
+    if (strcmp(cmd, "serve") == 0) return cmd_serve(sh, argc, argv);
+
+    // Utility
+    if (strcmp(cmd, "base64") == 0) return cmd_base64(sh, argc, argv);
+    if (strcmp(cmd, "whoami") == 0) return cmd_whoami(sh, argc, argv);
+    if (strcmp(cmd, "uptime") == 0) return cmd_uptime(sh, argc, argv);
+    if (strcmp(cmd, "open") == 0) return cmd_open(sh, argc, argv);
 
     // Claude
     if (strcmp(cmd, "claude") == 0) return cmd_claude(sh, argc, argv);

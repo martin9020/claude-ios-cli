@@ -68,7 +68,7 @@ class ShellBridge: ObservableObject {
         ## Shell Commands
         **Filesystem:** ls [-la], cat, cp, mv, rm, mkdir, touch, pwd, cd, find [-name][-type], chmod, du [-h], ln
         **Text:** grep [-i][-n][-c][-v][-r], head [-n], tail [-n], wc [-l][-w][-c], sort [-r], uniq [-c][-d], sed 's/find/replace/[g]', tr [-d][-s] 'set1' 'set2', cut -d<delim> -f<fields> [-c<range>], diff
-        **System:** echo [-n][-e], env, export, which, clear, exit, help, date, sleep, test [-f][-d][-z][-n], basename, dirname, true, false
+        **System:** echo [-n][-e], env, export, which, clear, exit, help, date, sleep, test [-f][-d][-z][-n], basename, dirname, true, false, serve, base64, whoami, uptime, open
         **Network:** curl [-X method][-d data] <url>, wget [-O file] <url>
         **Node.js:** node <file.js>, node -e "code", npm install/list/run/init
         **Shell:** VAR=val, $VAR, ${VAR}, &&, ||, |, >, >>, "quotes", 'quotes', #comments
@@ -105,6 +105,9 @@ class ShellBridge: ObservableObject {
         // Register node/npm handlers
         shell_set_node_handler(nodeCommandCallback)
         shell_set_npm_handler(npmCommandCallback)
+
+        // Register serve handler
+        shell_set_serve_handler(serveCommandCallback)
 
         // Initialize JS engine and npm manager
         JsEngine.shared.setup(sandboxRoot: sandboxRoot)
@@ -744,6 +747,32 @@ private func npmCommandCallback(
     let cwd = String(cString: shell_get_cwd(sh))
 
     let exitCode = NpmManager.shared.handleCommand(args: args, cwd: cwd) { output in
+        shell_output(sh, output)
+    }
+    shell_set_exit_code(sh, exitCode)
+}
+
+/// Serve command callback — starts/stops HTTP file server
+private func serveCommandCallback(
+    _ sh: UnsafeMutablePointer<Shell>?,
+    _ argc: Int32,
+    _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) {
+    guard let sh = sh else { return }
+
+    var args: [String] = []
+    if let argv = argv {
+        for i in 1..<Int(argc) { // Skip "serve" itself
+            if let arg = argv[i] {
+                args.append(String(cString: arg))
+            }
+        }
+    }
+
+    let cwd = String(cString: shell_get_cwd(sh))
+    let root = String(cString: shell_get_root(sh))
+
+    let exitCode = HttpServer.shared.handleCommand(args: args, sandboxRoot: root, cwd: cwd) { output in
         shell_output(sh, output)
     }
     shell_set_exit_code(sh, exitCode)

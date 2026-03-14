@@ -61,4 +61,13 @@ int cmd_claude(Shell *sh, int argc, char **argv);
 int cmd_node(Shell *sh, int argc, char **argv);
 int cmd_npm(Shell *sh, int argc, char **argv);
 
+// HTTP server
+int cmd_serve(Shell *sh, int argc, char **argv);
+
+// Utility commands
+int cmd_base64(Shell *sh, int argc, char **argv);
+int cmd_whoami(Shell *sh, int argc, char **argv);
+int cmd_uptime(Shell *sh, int argc, char **argv);
+int cmd_open(Shell *sh, int argc, char **argv);
+
 #endif
