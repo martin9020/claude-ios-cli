@@ -144,17 +144,18 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // OAuth2 token endpoint requires form-urlencoded (not JSON)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: String] = [
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirectUri,
-            "client_id": clientId,
-            "code_verifier": verifier
-        ]
+        let params = [
+            "grant_type=authorization_code",
+            "code=\(code)",
+            "redirect_uri=\(redirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? redirectUri)",
+            "client_id=\(clientId)",
+            "code_verifier=\(verifier)"
+        ].joined(separator: "&")
 
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.httpBody = params.data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -169,7 +170,9 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    self.statusMessage = "Invalid token response"
+                    // Show raw response for debugging
+                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "no data"
+                    self.statusMessage = "Invalid response: \(String(raw.prefix(200)))"
                     return
                 }
 
@@ -179,7 +182,9 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                 }
 
                 guard let accessToken = json["access_token"] as? String else {
-                    self.statusMessage = "No access token in response"
+                    // Show what we actually got for debugging
+                    let keys = json.keys.joined(separator: ", ")
+                    self.statusMessage = "No access_token. Response keys: \(keys)"
                     return
                 }
 
@@ -241,14 +246,14 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: String] = [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": clientId
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let params = [
+            "grant_type=refresh_token",
+            "refresh_token=\(refreshToken)",
+            "client_id=\(clientId)"
+        ].joined(separator: "&")
+        request.httpBody = params.data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let self = self else { completion(nil); return }
