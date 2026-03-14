@@ -12,7 +12,8 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     @Published var statusMessage: String = ""
 
     private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
-    private let authorizeEndpoint = "https://platform.claude.com/oauth/authorize"
+    // Use claude.ai authorize endpoint (platform.claude.com may redirect and drop params)
+    private let authorizeEndpoint = "https://claude.ai/oauth/authorize"
     private let callbackScheme = "claudeshell"
 
     /// Official Claude Code OAuth client_id (from @anthropic-ai/claude-code npm package)
@@ -65,14 +66,25 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         // Compute code_challenge = base64url(SHA256(verifier))
         let challenge = generateCodeChallenge(from: verifier)
 
-        // Build authorize URL manually to avoid URLComponents encoding colons in scope
+        // Build authorize URL — construct percent-encoded query manually
+        // to ensure colons stay unencoded and spaces become %20
         let redirectUri = "\(callbackScheme)://oauth/callback"
-        let scopes = "user:inference user:sessions:claude_code"
-        let encodedRedirect = redirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? redirectUri
-        let encodedChallenge = challenge.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? challenge
-        let authURLString = "\(authorizeEndpoint)?client_id=\(clientId)&response_type=code&redirect_uri=\(encodedRedirect)&code_challenge=\(encodedChallenge)&code_challenge_method=S256&scope=\(scopes.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? scopes)"
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        let scope = "user:inference%20user:sessions:claude_code"
 
-        guard let authURL = URL(string: authURLString) else {
+        let queryString = [
+            "client_id=\(clientId)",
+            "response_type=code",
+            "redirect_uri=\(redirectUri)",
+            "code_challenge=\(challenge)",
+            "code_challenge_method=S256",
+            "scope=\(scope)"
+        ].joined(separator: "&")
+
+        var components = URLComponents(string: authorizeEndpoint)!
+        components.percentEncodedQuery = queryString
+
+        guard let authURL = components.url else {
             statusMessage = "Failed to build auth URL"
             isLoading = false
             return
