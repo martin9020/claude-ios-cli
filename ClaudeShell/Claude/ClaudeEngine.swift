@@ -77,33 +77,16 @@ class ClaudeEngine {
         return prompt
     }
 
-    /// Auth result — either OAuth Bearer token or API key
-    enum AuthMethod {
-        case oauth(String)   // Bearer token
-        case apiKey(String)  // x-api-key
-    }
-
-    /// Resolve auth — OAuth token first, then API key
-    func resolveAuth(apiKey: String) -> AuthMethod? {
-        if let oauthToken = OAuthManager.shared.getToken() {
-            return .oauth(oauthToken)
+    /// Resolve API key — OAuth (stored as API key after creation) or manual API key
+    func resolveApiKey(apiKey: String) -> String? {
+        // OAuth flow creates a real API key and stores it in keychainAccessToken
+        if let oauthKey = OAuthManager.shared.getToken() {
+            return oauthKey
         }
         if !apiKey.isEmpty {
-            return .apiKey(apiKey)
+            return apiKey
         }
         return nil
-    }
-
-    /// Apply auth headers to a request
-    private func applyAuth(_ auth: AuthMethod, to request: inout URLRequest) {
-        switch auth {
-        case .oauth(let token):
-            // OAuth tokens use Bearer auth
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        case .apiKey(let key):
-            // API keys use x-api-key header
-            request.setValue(key, forHTTPHeaderField: "x-api-key")
-        }
     }
 
     /// Send a message to Claude and get a response
@@ -111,7 +94,7 @@ class ClaudeEngine {
                      directoryListing: String = "",
                      completion: @escaping (String) -> Void) {
 
-        guard let auth = resolveAuth(apiKey: apiKey) else {
+        guard let resolvedKey = resolveApiKey(apiKey: apiKey) else {
             completion("Error: No API key or OAuth token available. Configure in Settings.")
             return
         }
@@ -147,7 +130,7 @@ class ClaudeEngine {
         request.httpMethod = "POST"
         request.httpBody = jsonData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(auth, to: &request)
+        request.setValue(resolvedKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 120
 
@@ -206,7 +189,7 @@ class ClaudeEngine {
                               directoryListing: String = "",
                               messages: [[String: Any]]? = nil) -> ClaudeResponse {
 
-        guard let auth = resolveAuth(apiKey: apiKey) else {
+        guard let resolvedKey = resolveApiKey(apiKey: apiKey) else {
             return .error("No API key or OAuth token available. Configure in Settings.")
         }
 
@@ -241,7 +224,7 @@ class ClaudeEngine {
         request.httpMethod = "POST"
         request.httpBody = jsonData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(auth, to: &request)
+        request.setValue(resolvedKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 120
 

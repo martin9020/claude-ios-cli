@@ -17,6 +17,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     private let authorizeEndpoint = "https://platform.claude.com/oauth/authorize"
     private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
     private let manualRedirectUri = "https://platform.claude.com/oauth/code/callback"
+    private let apiKeyEndpoint = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key"
     private let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
     // Full scopes from Claude Code source (ed1 array)
@@ -221,7 +222,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                     return
                 }
 
-                // Success — extract tokens
+                // Success — extract OAuth tokens
                 guard let accessToken = json["access_token"] as? String else {
                     let keys = json.keys.joined(separator: ", ")
                     self.statusMessage = "No access_token in response (keys: \(keys))"
@@ -232,8 +233,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                 self.codeVerifier = nil
                 self.oauthState = nil
 
-                // Store tokens
-                self.saveToKeychain(key: self.keychainAccessToken, value: accessToken)
+                // Store OAuth tokens for refresh
                 if let refresh = json["refresh_token"] as? String {
                     self.saveToKeychain(key: self.keychainRefreshToken, value: refresh)
                 }
@@ -241,6 +241,66 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                 let expiry = Date().addingTimeInterval(TimeInterval(expiresIn)).timeIntervalSince1970
                 self.saveToKeychain(key: self.keychainTokenExpiry,
                                    value: String(format: "%.0f", expiry))
+
+                // Now exchange OAuth token for an actual API key
+                // (Anthropic API doesn't accept OAuth tokens directly)
+                self.statusMessage = "Creating API key..."
+                self.createApiKey(oauthToken: accessToken)
+            }
+        }.resume()
+    }
+
+    // MARK: - API Key Creation (exact copy of Claude Code's uy8 function)
+    // Source: X8.post(P7().API_KEY_URL, null, {headers:{Authorization:`Bearer ${A}`}})
+
+    private func createApiKey(oauthToken: String) {
+        guard let url = URL(string: apiKeyEndpoint) else {
+            statusMessage = "Invalid API key endpoint"
+            isLoading = false
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(oauthToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+
+                if let error = error {
+                    self.statusMessage = "API key error: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "no data"
+                    self.statusMessage = "API key error: \(String(raw.prefix(200)))"
+                    return
+                }
+
+                // Check for error
+                if let errorDict = json["error"] as? [String: Any],
+                   let message = errorDict["message"] as? String {
+                    self.statusMessage = "API key error: \(message)"
+                    return
+                }
+
+                // Extract the raw API key
+                guard let rawKey = json["raw_key"] as? String else {
+                    let keys = json.keys.joined(separator: ", ")
+                    self.statusMessage = "No raw_key in response (keys: \(keys))"
+                    return
+                }
+
+                // Store the actual API key — this is what the Claude API accepts
+                self.saveToKeychain(key: self.keychainAccessToken, value: rawKey)
+                // Also store the OAuth token for future refresh
+                self.saveToKeychain(key: "com.claudeshell.oauth.bearerToken", value: oauthToken)
 
                 self.isSignedIn = true
                 self.statusMessage = "Signed in successfully!"
