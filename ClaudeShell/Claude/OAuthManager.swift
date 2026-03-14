@@ -144,18 +144,20 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        // OAuth2 token endpoint requires form-urlencoded (not JSON)
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let params = [
-            "grant_type=authorization_code",
-            "code=\(code)",
-            "redirect_uri=\(redirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? redirectUri)",
-            "client_id=\(clientId)",
-            "code_verifier=\(verifier)"
-        ].joined(separator: "&")
-
-        request.httpBody = params.data(using: .utf8)
+        // Build form body using URLComponents for correct percent encoding
+        var formComponents = URLComponents()
+        formComponents.queryItems = [
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "redirect_uri", value: redirectUri),
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "code_verifier", value: verifier)
+        ]
+        // URLComponents.query percent-encodes values correctly for form bodies
+        // But it encodes space as + which is fine for form-urlencoded
+        request.httpBody = formComponents.percentEncodedQuery?.data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -253,12 +255,13 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let params = [
-            "grant_type=refresh_token",
-            "refresh_token=\(refreshToken)",
-            "client_id=\(clientId)"
-        ].joined(separator: "&")
-        request.httpBody = params.data(using: .utf8)
+        var formComponents = URLComponents()
+        formComponents.queryItems = [
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+            URLQueryItem(name: "refresh_token", value: refreshToken),
+            URLQueryItem(name: "client_id", value: clientId)
+        ]
+        request.httpBody = formComponents.percentEncodedQuery?.data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let self = self else { completion(nil); return }
