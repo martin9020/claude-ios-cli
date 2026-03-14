@@ -325,6 +325,18 @@ class ShellBridge: ObservableObject {
             }
         }
 
+        // Add tool_result for any pending tool_use in the last response
+        // so conversation history stays valid for the next message
+        switch response {
+        case .toolUse(let id, _, _):
+            ClaudeEngine.shared.appendToolResult(toolUseId: id, result: "Stopped: maximum iterations reached")
+        case .mixed(_, let toolUses):
+            for tu in toolUses {
+                ClaudeEngine.shared.appendToolResult(toolUseId: tu.id, result: "Stopped: maximum iterations reached")
+            }
+        default:
+            break
+        }
         outputParts.append("\n⚠ Reached maximum iterations (\(maxIterations))")
         return outputParts.joined(separator: "\n")
     }

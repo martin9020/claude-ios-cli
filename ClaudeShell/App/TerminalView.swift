@@ -112,6 +112,17 @@ struct TerminalView: View {
             // Quick command bar — context-dependent
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
+                    // Copy log button — always visible
+                    Button(action: copyLog) {
+                        Text("copy")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.yellow)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color(red: 0.2, green: 0.18, blue: 0.1))
+                            .cornerRadius(4)
+                    }
+
                     if shell.claudeMode {
                         quickButton("/exit", command: "/exit")
                         quickButton("/clear", command: "/clear")
@@ -342,6 +353,12 @@ struct TerminalView: View {
 
     private func insertText(_ text: String) {
         inputText += text
+    }
+
+    private func copyLog() {
+        let fullLog = terminal.lines.map { $0.text }.joined(separator: "\n")
+        UIPasteboard.general.string = fullLog
+        terminal.addSystem("Copied \(terminal.lines.count) lines to clipboard")
     }
 
     private func syncApiKey() {
