@@ -6,13 +6,91 @@ struct SettingsView: View {
     @AppStorage("font_size") private var fontSize = 13.0
     @AppStorage("model_id") private var modelId = "claude-sonnet-4-20250514"
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var oauthManager = OAuthManager.shared
     @State private var showSafari = false
     @State private var pasteMessage = ""
+    @State private var isInstallingClaudeCode = false
+    @State private var installOutput = ""
 
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Claude API")) {
+                // MARK: - Claude Pro/Max Section (Primary)
+                Section(header: Text("Claude Pro / Max")) {
+                    // Sign-in status
+                    HStack {
+                        Image(systemName: oauthManager.isSignedIn ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(oauthManager.isSignedIn ? .green : .gray)
+                        Text(oauthManager.isSignedIn ? "Signed in with Claude Pro" : "Not signed in")
+                            .foregroundColor(oauthManager.isSignedIn ? .green : .secondary)
+                    }
+
+                    if !oauthManager.statusMessage.isEmpty {
+                        Text(oauthManager.statusMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if oauthManager.isSignedIn {
+                        // Sign out button
+                        Button(action: { oauthManager.signOut() }) {
+                            HStack {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                Text("Sign Out")
+                            }
+                            .foregroundColor(.red)
+                        }
+                    } else {
+                        // Install Claude Code package (prerequisite)
+                        if !NpmManager.shared.isClaudeCodeInstalled {
+                            Button(action: installClaudeCodePackage) {
+                                HStack {
+                                    if isInstallingClaudeCode {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "arrow.down.circle")
+                                    }
+                                    Text(isInstallingClaudeCode ? "Installing..." : "Install Claude Code Package")
+                                }
+                            }
+                            .disabled(isInstallingClaudeCode)
+
+                            if !installOutput.isEmpty {
+                                Text(installOutput)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(3)
+                            }
+                        } else {
+                            HStack {
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundColor(.green)
+                                Text("Claude Code package installed")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
+                        }
+
+                        // Sign in button
+                        Button(action: { oauthManager.startOAuthFlow() }) {
+                            HStack {
+                                if oauthManager.isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "person.crop.circle.badge.checkmark")
+                                }
+                                Text("Sign in with Claude Pro/Max")
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                        .disabled(oauthManager.isLoading)
+                    }
+                }
+
+                // MARK: - API Key Section (Alternative)
+                Section(header: Text("Alternative: API Key")) {
                     // API Key status
                     HStack {
                         Image(systemName: apiKey.isEmpty ? "xmark.circle.fill" : "checkmark.circle.fill")
@@ -95,15 +173,31 @@ struct SettingsView: View {
                         Text("ClaudeShell (embedded POSIX)")
                             .foregroundColor(.secondary)
                     }
+                    HStack {
+                        Text("Auth")
+                        Spacer()
+                        Text(oauthManager.isSignedIn ? "OAuth (Pro/Max)" :
+                             (apiKey.isEmpty ? "Not configured" : "API Key"))
+                            .foregroundColor(.secondary)
+                    }
                 }
 
-                Section(header: Text("How to get your API key")) {
+                Section(header: Text("How to use")) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("1. Tap \"Get API Key\" above", systemImage: "1.circle")
-                        Label("2. Sign in to Anthropic", systemImage: "2.circle")
-                        Label("3. Go to API Keys", systemImage: "3.circle")
-                        Label("4. Create a new key & copy it", systemImage: "4.circle")
-                        Label("5. Come back & tap \"Paste\"", systemImage: "5.circle")
+                        Label("Option A: Sign in with Pro/Max subscription", systemImage: "a.circle")
+                            .fontWeight(.medium)
+                        Label("  1. Install Claude Code package", systemImage: "1.circle")
+                        Label("  2. Tap Sign in with Claude Pro/Max", systemImage: "2.circle")
+                        Label("  3. Log into your Anthropic account", systemImage: "3.circle")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Option B: Use API key (prepaid credits)", systemImage: "b.circle")
+                            .fontWeight(.medium)
+                        Label("  1. Get an API key from Anthropic", systemImage: "1.circle")
+                        Label("  2. Paste it in the field above", systemImage: "2.circle")
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -133,6 +227,28 @@ struct SettingsView: View {
             }
         } else {
             pasteMessage = "Error: Nothing in clipboard"
+        }
+    }
+
+    private func installClaudeCodePackage() {
+        isInstallingClaudeCode = true
+        installOutput = "Starting installation..."
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = NpmManager.shared.installClaudeCode { line in
+                DispatchQueue.main.async {
+                    self.installOutput = line.trimmingCharacters(in: .newlines)
+                }
+            }
+
+            DispatchQueue.main.async {
+                self.isInstallingClaudeCode = false
+                if result == 0 {
+                    self.installOutput = "Claude Code package installed successfully!"
+                } else {
+                    self.installOutput = "Installation failed. Check your network and try again."
+                }
+            }
         }
     }
 }

@@ -20,6 +20,7 @@ class TerminalEmulator: ObservableObject {
             case error      // Error output
             case prompt     // Shell prompt
             case system     // System messages
+            case tool       // Tool execution progress
         }
     }
 
@@ -52,6 +53,11 @@ class TerminalEmulator: ObservableObject {
 
     func addSystem(_ text: String) {
         lines.append(TerminalLine(text: text, type: .system))
+        trimScrollback()
+    }
+
+    func addTool(_ text: String) {
+        lines.append(TerminalLine(text: text, type: .tool))
         trimScrollback()
     }
 

@@ -16,6 +16,7 @@ struct TerminalView: View {
     private let outputColor = Color.white
     private let errorColor = Color.red
     private let systemColor = Color.cyan
+    private let toolColor = Color.orange
     private let bgColor = Color(red: 0.05, green: 0.05, blue: 0.1)
 
     var body: some View {
@@ -149,6 +150,7 @@ struct TerminalView: View {
         .onAppear {
             showWelcome()
             syncApiKey()
+            setupToolProgress()
             inputFocused = true
         }
     }
@@ -164,6 +166,7 @@ struct TerminalView: View {
             case .output: return outputColor
             case .error: return errorColor
             case .system: return systemColor
+            case .tool: return toolColor
             }
         }()
 
@@ -352,8 +355,24 @@ struct TerminalView: View {
         }
     }
 
+    private func setupToolProgress() {
+        // Set up callback for live tool progress display
+        shell.toolProgressCallback = { [self] message in
+            DispatchQueue.main.async {
+                self.terminal.addTool(message)
+            }
+        }
+    }
+
     private func showWelcome() {
         terminal.addSystem("ClaudeShell v1.0 — Claude Code for iOS")
+        if OAuthManager.shared.isSignedIn {
+            terminal.addSystem("Signed in with Claude Pro/Max ✓")
+        } else if !savedApiKey.isEmpty {
+            terminal.addSystem("API key configured ✓")
+        } else {
+            terminal.addSystem("Configure auth in Settings (gear icon)")
+        }
         terminal.addSystem("Type 'help' for commands, 'claude' to start AI chat")
         terminal.addSystem("")
     }

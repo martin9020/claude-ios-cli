@@ -16,6 +16,26 @@ class NpmManager {
                                                    withIntermediateDirectories: true)
     }
 
+    // MARK: - Claude Code Package
+
+    /// Path to the installed @anthropic-ai/claude-code package
+    var claudeCodePath: String { nodeModulesPath + "/@anthropic-ai/claude-code" }
+
+    /// Check if @anthropic-ai/claude-code is installed
+    var isClaudeCodeInstalled: Bool {
+        FileManager.default.fileExists(atPath: claudeCodePath + "/package.json")
+    }
+
+    /// Install the @anthropic-ai/claude-code package from npm
+    /// Returns 0 on success, 1 on failure
+    func installClaudeCode(output: @escaping (String) -> Void) -> Int32 {
+        // Create scoped directory for @anthropic-ai
+        let scopeDir = nodeModulesPath + "/@anthropic-ai"
+        try? FileManager.default.createDirectory(atPath: scopeDir,
+                                                   withIntermediateDirectories: true)
+        return installPackage(name: "@anthropic-ai/claude-code", output: output)
+    }
+
     /// Handle `npm` command with subcommands
     func handleCommand(args: [String], cwd: String, output: @escaping (String) -> Void) -> Int32 {
         guard !args.isEmpty else {

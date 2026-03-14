@@ -10,6 +10,9 @@ class ShellBridge: ObservableObject {
     @Published var isRunning: Bool = true
     @Published var claudeMode: Bool = false
 
+    /// Callback for live tool execution progress (set by TerminalView)
+    var toolProgressCallback: ((String) -> Void)?
+
     // Singleton for C callback access
     static var shared: ShellBridge?
 
@@ -104,83 +107,135 @@ class ShellBridge: ObservableObject {
         }
     }
 
-    /// Enter interactive Claude mode
-    func enterClaudeMode() -> String {
-        guard let shell = shell else {
-            claudeMode = false
-            return "Error: shell not initialized\n"
+    // MARK: - Tool Execution (Phase 2: Autonomous)
+
+    /// Execute a shell command and capture the output synchronously
+    func executeAndCapture(_ command: String) -> String {
+        guard let shell = shell else { return "Error: shell not initialized\n" }
+
+        // Save and clear the buffer
+        let savedBuffer = outputBuffer
+        DispatchQueue.main.sync {
+            self.outputBuffer = ""
         }
 
-        // Check API key
-        guard let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") else {
-            claudeMode = false
-            return """
-            \u{001B}[1;31mNo API key configured.\u{001B}[0m
+        // Execute
+        let _ = shell_exec(shell, command)
 
-            Set your key first:
-              export ANTHROPIC_API_KEY=sk-ant-...
-
-            Or configure in Settings (gear icon).
-            """
+        // Reset running if needed
+        if shell_is_running(shell) == 0 {
+            shell_reset_running(shell)
         }
 
-        let _ = String(cString: apiKeyPtr) // validate it's readable
-        claudeMode = true
+        // Small delay for output callback
+        Thread.sleep(forTimeInterval: 0.05)
 
-        // Get directory listing for context
-        let cwd = currentDirectory
-        let fullCwd = sandboxRoot + cwd
-        var fileList = ""
-        if let entries = try? FileManager.default.contentsOfDirectory(atPath: fullCwd) {
-            fileList = entries.prefix(20).joined(separator: ", ")
-            if entries.count > 20 { fileList += " ... (\(entries.count) total)" }
+        // Capture output
+        var captured = ""
+        DispatchQueue.main.sync {
+            captured = self.outputBuffer
+            self.outputBuffer = savedBuffer
         }
 
-        var banner = """
-        \u{001B}[1;35m╭──────────────────────────────────────╮\u{001B}[0m
-        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[1;37mClaude Code\u{001B}[0m · \u{001B}[36mClaudeShell v1.0\u{001B}[0m      \u{001B}[1;35m│\u{001B}[0m
-        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mModel: claude-sonnet-4\u{001B}[0m              \u{001B}[1;35m│\u{001B}[0m
-        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mJust type naturally. /help for cmds\u{001B}[0m  \u{001B}[1;35m│\u{001B}[0m
-        \u{001B}[1;35m╰──────────────────────────────────────╯\u{001B}[0m
-        """
-
-        if !fileList.isEmpty {
-            banner += "\n\u{001B}[90mFiles here: \(fileList)\u{001B}[0m"
-        }
-
-        return banner
+        return captured
     }
 
-    /// Handle input while in Claude mode
-    func handleClaudeInput(_ input: String) -> String {
+    /// Execute a tool by name with given input parameters
+    func executeTool(_ toolName: String, _ input: [String: Any]) -> String {
+        switch toolName {
+        case "bash":
+            guard let command = input["command"] as? String else {
+                return "Error: 'command' parameter required for bash tool"
+            }
+            toolProgressCallback?("> Running: \(command)")
+            return executeAndCapture(command)
+
+        case "read_file":
+            guard let path = input["path"] as? String else {
+                return "Error: 'path' parameter required for read_file tool"
+            }
+            toolProgressCallback?("> Reading: \(path)")
+            let fullPath: String
+            if path.hasPrefix("/") {
+                fullPath = sandboxRoot + path
+            } else {
+                fullPath = sandboxRoot + currentDirectory + "/" + path
+            }
+            if let content = try? String(contentsOfFile: fullPath, encoding: .utf8) {
+                // Limit to 10KB to stay within API limits
+                if content.count > 10240 {
+                    return String(content.prefix(10240)) + "\n...(truncated at 10KB)"
+                }
+                return content
+            } else {
+                return "Error: File not found or unreadable: \(path)"
+            }
+
+        case "write_file":
+            guard let path = input["path"] as? String,
+                  let content = input["content"] as? String else {
+                return "Error: 'path' and 'content' parameters required for write_file tool"
+            }
+            toolProgressCallback?("> Writing: \(path)")
+            let fullPath: String
+            if path.hasPrefix("/") {
+                fullPath = sandboxRoot + path
+            } else {
+                fullPath = sandboxRoot + currentDirectory + "/" + path
+            }
+            // Create parent directories if needed
+            let dir = (fullPath as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            do {
+                try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                return "File written: \(path) (\(content.count) bytes)"
+            } catch {
+                return "Error writing file: \(error.localizedDescription)"
+            }
+
+        default:
+            return "Error: Unknown tool '\(toolName)'"
+        }
+    }
+
+    // MARK: - Agentic Claude Mode
+
+    /// Handle input with agentic tool loop — Claude autonomously uses tools
+    func handleClaudeInputAgentic(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
 
-        // Slash commands
+        // Slash commands handled normally
         if trimmed.hasPrefix("/") {
             return handleSlashCommand(trimmed)
         }
 
-        // Empty input
         if trimmed.isEmpty { return "" }
 
         guard let shell = shell else { return "Error: shell not available\n" }
 
-        guard let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") else {
-            claudeMode = false
-            return "Error: API key lost. Run 'export ANTHROPIC_API_KEY=...' and try again.\n"
+        let apiKey: String
+        if let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") {
+            apiKey = String(cString: apiKeyPtr)
+        } else {
+            apiKey = "" // Will try OAuth
         }
 
-        let apiKey = String(cString: apiKeyPtr)
-        let cwd = currentDirectory
+        // Check if we have any auth
+        if apiKey.isEmpty && OAuthManager.shared.getToken() == nil {
+            claudeMode = false
+            return "Error: No API key or OAuth token. Configure in Settings.\n"
+        }
 
-        // Build context: list files in current directory
+        let cwd = currentDirectory
         let fullCwd = sandboxRoot + cwd
+
+        // Build context
         var dirContext = ""
         if let entries = try? FileManager.default.contentsOfDirectory(atPath: fullCwd) {
             dirContext = entries.joined(separator: "\n")
         }
 
-        // If user references a file that exists, read it for context
+        // Read referenced files for context
         var fileContext = ""
         let words = trimmed.components(separatedBy: .whitespaces)
         for word in words {
@@ -205,22 +260,135 @@ class ShellBridge: ObservableObject {
             fullPrompt += fileContext
         }
 
-        // Call Claude
-        var result = ""
-        let semaphore = DispatchSemaphore(value: 0)
+        // Agentic loop
+        var iteration = 0
+        let maxIterations = 25
+        var outputParts: [String] = []
 
-        ClaudeEngine.shared.sendMessage(
+        // Initial call with tools
+        var response = ClaudeEngine.shared.sendMessageWithTools(
             prompt: fullPrompt,
             apiKey: apiKey,
             cwd: cwd,
             directoryListing: dirContext
-        ) { response in
-            result = response
-            semaphore.signal()
+        )
+
+        while iteration < maxIterations {
+            iteration += 1
+
+            switch response {
+            case .text(let text):
+                outputParts.append(text)
+                return outputParts.joined(separator: "\n")
+
+            case .toolUse(let id, let name, let input):
+                let toolResult = executeTool(name, input)
+                outputParts.append("⚙ \(name): \(toolResultSummary(name, input))")
+                ClaudeEngine.shared.appendToolResult(toolUseId: id, result: toolResult)
+
+                // Continue the loop
+                response = ClaudeEngine.shared.sendMessageWithTools(
+                    prompt: "", apiKey: apiKey, cwd: cwd,
+                    directoryListing: dirContext,
+                    messages: ClaudeEngine.shared.conversationHistory
+                )
+
+            case .mixed(let text, let toolUses):
+                if !text.isEmpty {
+                    outputParts.append(text)
+                }
+                // Execute all tool uses
+                for tu in toolUses {
+                    let toolResult = executeTool(tu.name, tu.input)
+                    outputParts.append("⚙ \(tu.name): \(toolResultSummary(tu.name, tu.input))")
+                    ClaudeEngine.shared.appendToolResult(toolUseId: tu.id, result: toolResult)
+                }
+                // Continue
+                response = ClaudeEngine.shared.sendMessageWithTools(
+                    prompt: "", apiKey: apiKey, cwd: cwd,
+                    directoryListing: dirContext,
+                    messages: ClaudeEngine.shared.conversationHistory
+                )
+
+            case .error(let error):
+                outputParts.append("Error: \(error)")
+                return outputParts.joined(separator: "\n")
+            }
         }
 
-        semaphore.wait()
-        return result
+        outputParts.append("\n⚠ Reached maximum iterations (\(maxIterations))")
+        return outputParts.joined(separator: "\n")
+    }
+
+    /// Summarize a tool execution for display
+    private func toolResultSummary(_ name: String, _ input: [String: Any]) -> String {
+        switch name {
+        case "bash":
+            return input["command"] as? String ?? ""
+        case "read_file":
+            return input["path"] as? String ?? ""
+        case "write_file":
+            return input["path"] as? String ?? ""
+        default:
+            return name
+        }
+    }
+
+    /// Enter interactive Claude mode
+    func enterClaudeMode() -> String {
+        guard let shell = shell else {
+            claudeMode = false
+            return "Error: shell not initialized\n"
+        }
+
+        // Check for auth: OAuth or API key
+        let hasApiKey = shell_get_env(shell, "ANTHROPIC_API_KEY") != nil
+        let hasOAuth = OAuthManager.shared.isSignedIn
+
+        if !hasApiKey && !hasOAuth {
+            claudeMode = false
+            return """
+            \u{001B}[1;31mNo authentication configured.\u{001B}[0m
+
+            Option A: Sign in with Claude Pro/Max in Settings.
+            Option B: export ANTHROPIC_API_KEY=sk-ant-...
+
+            Or configure in Settings (gear icon).
+            """
+        }
+
+        claudeMode = true
+
+        // Get directory listing for context
+        let cwd = currentDirectory
+        let fullCwd = sandboxRoot + cwd
+        var fileList = ""
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: fullCwd) {
+            fileList = entries.prefix(20).joined(separator: ", ")
+            if entries.count > 20 { fileList += " ... (\(entries.count) total)" }
+        }
+
+        let authLabel = hasOAuth ? "Pro/Max" : "API Key"
+        var banner = """
+        \u{001B}[1;35m╭──────────────────────────────────────╮\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[1;37mClaude Code\u{001B}[0m · \u{001B}[36mClaudeShell v1.0\u{001B}[0m      \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mModel: claude-sonnet-4\u{001B}[0m              \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mAuth: \(authLabel)\u{001B}[0m                        \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mTools: bash, read_file, write_file\u{001B}[0m  \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m│\u{001B}[0m  \u{001B}[90mJust type naturally. /help for cmds\u{001B}[0m  \u{001B}[1;35m│\u{001B}[0m
+        \u{001B}[1;35m╰──────────────────────────────────────╯\u{001B}[0m
+        """
+
+        if !fileList.isEmpty {
+            banner += "\n\u{001B}[90mFiles here: \(fileList)\u{001B}[0m"
+        }
+
+        return banner
+    }
+
+    /// Handle input while in Claude mode — uses agentic tool loop
+    func handleClaudeInput(_ input: String) -> String {
+        return handleClaudeInputAgentic(input)
     }
 
     /// Handle slash commands in Claude mode
@@ -241,11 +409,14 @@ class ShellBridge: ObservableObject {
         case "/status":
             guard let shell = shell else { return "Shell not available\n" }
             let hasKey = shell_get_env(shell, "ANTHROPIC_API_KEY") != nil
+            let hasOAuth = OAuthManager.shared.isSignedIn
             return """
             \u{001B}[1mClaude Status\u{001B}[0m
-              API: \(hasKey ? "\u{001B}[32mconnected\u{001B}[0m" : "\u{001B}[31mno key\u{001B}[0m")
+              API: \(hasKey ? "\u{001B}[32mAPI key set\u{001B}[0m" : "\u{001B}[90mno API key\u{001B}[0m")
+              OAuth: \(hasOAuth ? "\u{001B}[32mPro/Max signed in\u{001B}[0m" : "\u{001B}[90mnot signed in\u{001B}[0m")
               Model: claude-sonnet-4
               History: \(ClaudeEngine.shared.historyCount) messages
+              Tools: bash, read_file, write_file
             """
 
         case "/model":
@@ -264,7 +435,11 @@ class ShellBridge: ObservableObject {
               "review todo.py"
               "what's in this directory?"
               "explain how grep works"
-              "edit config.json and add a new field"
+              "create a project with index.html and style.css"
+
+            \u{001B}[1mAutonomous tools:\u{001B}[0m
+              Claude can run commands, read and write files automatically.
+              Watch the ⚙ indicators to see what Claude is doing.
             """
 
         default:
@@ -276,13 +451,21 @@ class ShellBridge: ObservableObject {
     func claudeOneShot(_ message: String) -> String {
         guard let shell = shell else { return "Error: shell not available\n" }
 
-        guard let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") else {
+        let apiKey: String
+        if let apiKeyPtr = shell_get_env(shell, "ANTHROPIC_API_KEY") {
+            apiKey = String(cString: apiKeyPtr)
+        } else {
+            apiKey = ""
+        }
+
+        // Check for any auth
+        if apiKey.isEmpty && OAuthManager.shared.getToken() == nil {
             return """
-            \u{001B}[31mNo API key set.\u{001B}[0m Run: export ANTHROPIC_API_KEY=sk-ant-...
+            \u{001B}[31mNo authentication configured.\u{001B}[0m
+            Sign in with Pro/Max in Settings, or: export ANTHROPIC_API_KEY=sk-ant-...
             """
         }
 
-        let apiKey = String(cString: apiKeyPtr)
         let cwd = currentDirectory
         let fullCwd = sandboxRoot + cwd
 
@@ -402,15 +585,21 @@ private func claudeCommandCallback(
     switch subcommand {
     case "config":
         let hasKey = shell_get_env(sh, "ANTHROPIC_API_KEY") != nil
-        shell_output(sh, "Current API key: \(hasKey ? "****configured****" : "(not set)")\n")
+        let hasOAuth = OAuthManager.shared.isSignedIn
+        shell_output(sh, "API key: \(hasKey ? "****configured****" : "(not set)")\n")
+        shell_output(sh, "OAuth: \(hasOAuth ? "Pro/Max signed in" : "not signed in")\n")
         shell_output(sh, "Set with: export ANTHROPIC_API_KEY=sk-ant-...\n")
-        shell_output(sh, "Or configure in Settings (gear icon).\n")
+        shell_output(sh, "Or sign in with Pro/Max in Settings.\n")
 
     case "status":
         let hasKey = shell_get_env(sh, "ANTHROPIC_API_KEY") != nil
-        shell_output(sh, "Claude API: \(hasKey ? "ready" : "no API key set")\n")
+        let hasOAuth = OAuthManager.shared.isSignedIn
+        shell_output(sh, "Claude API: \(hasKey || hasOAuth ? "ready" : "no auth configured")\n")
+        if hasOAuth { shell_output(sh, "Auth: Pro/Max subscription\n") }
+        if hasKey { shell_output(sh, "Auth: API Key\n") }
         shell_output(sh, "Model: claude-sonnet-4-20250514\n")
         shell_output(sh, "History: \(ClaudeEngine.shared.historyCount) messages\n")
+        shell_output(sh, "Tools: bash, read_file, write_file\n")
         shell_output(sh, "Shell: ClaudeShell v1.0\n")
 
     default:

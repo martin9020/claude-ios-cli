@@ -40,6 +40,8 @@ let package = Package(
             sources: [
                 "Bridge/ShellBridge.swift",
                 "Claude/ClaudeEngine.swift",
+                "Claude/OAuthManager.swift",
+                "Claude/ToolDefinitions.swift",
                 "Terminal/TerminalEmulator.swift",
                 "Node/JsEngine.swift",
                 "Node/NpmManager.swift",
