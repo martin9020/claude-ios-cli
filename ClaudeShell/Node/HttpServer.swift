@@ -66,7 +66,8 @@ class HttpServer {
             return 1
         }
 
-        servingRoot = sandboxRoot + cwd
+        // cwd is already the full path (includes sandboxRoot)
+        servingRoot = cwd
         currentPort = port
 
         do {
@@ -150,9 +151,16 @@ class HttpServer {
         let cleaned = path.replacingOccurrences(of: "..", with: "")
         let filePath = servingRoot + cleaned
 
-        guard FileManager.default.fileExists(atPath: filePath),
-              let fileData = try? Data(contentsOf: URL(fileURLWithPath: filePath)) else {
-            return errorResponse(404, "Not Found")
+        // Try exact path first, then try with /index.html appended for directories
+        var resolvedPath = filePath
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: filePath, isDirectory: &isDir), isDir.boolValue {
+            resolvedPath = filePath + "/index.html"
+        }
+
+        guard FileManager.default.fileExists(atPath: resolvedPath),
+              let fileData = try? Data(contentsOf: URL(fileURLWithPath: resolvedPath)) else {
+            return errorResponse(404, "Not Found: \(cleaned)")
         }
 
         let ext = (filePath as NSString).pathExtension.lowercased()
