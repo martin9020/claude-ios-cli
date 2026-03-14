@@ -1,0 +1,53 @@
+MIT License
+
+Copyright (c) 2026 Martin Velichkov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+THIRD-PARTY NOTICES
+
+This software uses the following third-party services and components:
+
+1. Claude API by Anthropic (https://anthropic.com)
+   - Used for AI inference via the Messages API
+   - OAuth authentication uses Anthropic's public OAuth endpoints
+   - The OAuth client_id (9d1c250a-e61b-44d9-88ed-5944d1962f5e) is a public
+     identifier from the open-source Claude Code npm package
+   - No proprietary Anthropic source code is included in this project
+
+2. Apple iOS Frameworks
+   - AuthenticationServices (ASWebAuthenticationSession for OAuth)
+   - CryptoKit (SHA256 for PKCE)
+   - Security (Keychain for token storage)
+   - JavaScriptCore (JavaScript engine for node/npm)
+   - Compression (gzip decompression for npm packages)
+   - Network (NWListener, not currently used)
+
+3. npm Registry (https://registry.npmjs.org)
+   - Package metadata and tarballs downloaded at user's request
+   - No npm Inc. code is bundled in the application
+
+4. GitHub Actions
+   - CI/CD pipeline for building and packaging the IPA
+   - Uses actions/checkout, actions/cache, actions/upload-artifact
+
+This software is not affiliated with, endorsed by, or associated with
+Anthropic, Apple, npm Inc., or GitHub. "Claude" is a trademark of Anthropic.

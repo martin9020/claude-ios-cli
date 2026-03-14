@@ -32,26 +32,65 @@ class ShellBridge: ObservableObject {
             try? FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         }
 
-        // Write welcome file
+        // Write welcome + CLAUDE.md on first launch
         let welcomePath = docs.appendingPathComponent("README.txt")
         if !FileManager.default.fileExists(atPath: welcomePath.path) {
             let welcome = """
             Welcome to ClaudeShell!
             =======================
 
-            This is your sandboxed filesystem on iOS.
-            Everything runs locally in the app's sandbox.
+            Terminal + Claude Code for iOS.
 
             Quick start:
-              help          - Show all available commands
-              claude        - Start AI chat (interactive mode)
-              claude <msg>  - Quick one-shot AI question
-              ls            - List files
-              cat README.txt - Read this file
+              help              Show all commands
+              claude            Start AI chat (or tap Claude tab)
+              claude <msg>      One-shot AI question
+              ls / cat / grep   Shell commands work as expected
+              cat CLAUDE.md     Full feature reference
 
-            Your files are stored in the app's Documents directory.
+            Files visible in iOS Files app: On My iPhone > ClaudeShell
             """
             try? welcome.write(to: welcomePath, atomically: true, encoding: .utf8)
+        }
+
+        // CLAUDE.md — always overwrite so it stays current with the app version
+        let claudeMdPath = docs.appendingPathComponent("CLAUDE.md")
+        let claudeMd = """
+        # ClaudeShell — Agent Reference
+
+        You are Claude running inside ClaudeShell on iOS.
+
+        ## Your Tools
+        - **bash** — run any shell command, get output
+        - **read_file** — read file contents (path relative to cwd or absolute from /)
+        - **write_file** — create/edit files (creates parent dirs automatically)
+
+        ## Shell Commands
+        **Filesystem:** ls [-la], cat, cp, mv, rm, mkdir, touch, pwd, cd, find [-name][-type], chmod, du [-h], ln
+        **Text:** grep [-i][-n][-c][-v][-r], head [-n], tail [-n], wc [-l][-w][-c], sort [-r], uniq [-c][-d], sed 's/find/replace/[g]', tr [-d][-s] 'set1' 'set2', cut -d<delim> -f<fields> [-c<range>], diff
+        **System:** echo [-n][-e], env, export, which, clear, exit, help, date, sleep, test [-f][-d][-z][-n], basename, dirname, true, false
+        **Network:** curl [-X method][-d data] <url>, wget [-O file] <url>
+        **Node.js:** node <file.js>, node -e "code", npm install/list/run/init
+        **Shell:** VAR=val, $VAR, ${VAR}, &&, ||, |, >, >>, "quotes", 'quotes', #comments
+
+        ## Pipes
+        Work with: grep, head, tail, wc, sort, uniq, sed, cut, tr, cat
+
+        ## Limits
+        - 75 tool calls per turn
+        - No fork/exec, git, ssh, tar
+        - Use write_file (not echo >) for persistent file creation
+        - Use && (not ;) for chaining commands
+        - /dev/null works for discarding output
+        - All files in sandbox (/ = Documents root)
+        - Files visible in iOS Files app under On My iPhone > ClaudeShell
+
+        ## Tips
+        - Prefer write_file over echo > for reliability
+        - Use && to chain: mkdir dir && cd dir && ls
+        - Be concise — this is a mobile screen
+        """
+        try? claudeMd.write(to: claudeMdPath, atomically: true, encoding: .utf8)
         }
 
         // Create shell instance
