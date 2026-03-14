@@ -271,7 +271,7 @@ class ShellBridge: ObservableObject {
 
         // Agentic loop
         var iteration = 0
-        let maxIterations = 25
+        let maxIterations = 75
         var outputParts: [String] = []
 
         // Initial call with tools

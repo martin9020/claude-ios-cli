@@ -6,26 +6,14 @@ Enter `claude` mode, then paste ONE section at a time. After each section comple
 
 ---
 
-## Section 1: Filesystem — PASSED ✅ (tested 2026-03-14)
+## Section 1: Filesystem — EXECUTED (needs output verification)
 
-All filesystem commands verified working:
-- mkdir, touch, echo >, cat, ls, ls -la ✅
-- cp, mv, rm ✅
-- pwd, cd, cd .., cd / ✅
-- find -name, find -type ✅
-- du, chmod ✅
-- echo >> (append) ✅
+Commands ran without crashing. Need to verify actual output.
+Re-run to confirm: paste the Section 2 block below (it includes filesystem too).
 
 ---
 
-## Section 2: Text Processing — PARTIAL ✅ (tested 2026-03-14)
-
-Verified working:
-- head -2, tail -2 ✅
-- wc -l ✅
-- grep, grep -n, grep -i, grep -c, grep -v ✅
-
-**Still needs testing — paste this:**
+## Section 2: Text Processing — paste this:
 
 ```
 Test the remaining text commands. Run each, check output, write results to /qa_results_text.md:
