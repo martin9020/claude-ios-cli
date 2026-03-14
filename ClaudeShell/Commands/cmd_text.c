@@ -288,25 +288,58 @@ int cmd_sort(Shell *sh, int argc, char **argv) {
 
 int cmd_uniq(Shell *sh, int argc, char **argv) {
     if (argc < 2) {
-        shell_printf(sh, "usage: uniq file\n");
+        shell_printf(sh, "usage: uniq [-c] [-d] file\n");
         return 1;
     }
 
-    char path[SHELL_MAX_PATH];
-    resolve_path(sh, argv[1], path, sizeof(path));
+    int show_count = 0;
+    int only_dupes = 0;
+    int file_arg = -1;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-c") == 0) show_count = 1;
+        else if (strcmp(argv[i], "-d") == 0) only_dupes = 1;
+        else file_arg = i;
+    }
+
+    if (file_arg < 0) {
+        shell_printf(sh, "uniq: missing file argument\n");
+        return 1;
+    }
+
+    char path[SHELL_MAX_PATH * 2];
+    resolve_path(sh, argv[file_arg], path, sizeof(path));
 
     FILE *f = fopen(path, "r");
     if (!f) {
-        shell_printf(sh, "uniq: %s: %s\n", argv[1], strerror(errno));
+        shell_printf(sh, "uniq: %s: %s\n", argv[file_arg], strerror(errno));
         return 1;
     }
 
     char line[SHELL_MAX_LINE], prev[SHELL_MAX_LINE] = "";
+    int count = 0;
     while (fgets(line, sizeof(line), f)) {
-        if (strcmp(line, prev) != 0) {
-            shell_printf(sh, "%s", line);
+        if (strcmp(line, prev) == 0) {
+            count++;
+        } else {
+            if (prev[0] != '\0') {
+                if (!only_dupes || count > 1) {
+                    if (show_count)
+                        shell_printf(sh, "%7d %s", count, prev);
+                    else
+                        shell_printf(sh, "%s", prev);
+                }
+            }
             strncpy(prev, line, sizeof(prev));
+            count = 1;
         }
+    }
+    // Print last line
+    if (prev[0] != '\0' && (!only_dupes || count > 1)) {
+        if (show_count)
+            shell_printf(sh, "%7d %s", count, prev);
+        else
+            shell_printf(sh, "%s", prev);
     }
 
     fclose(f);
@@ -382,28 +415,147 @@ int cmd_sed(Shell *sh, int argc, char **argv) {
 }
 
 int cmd_tr(Shell *sh, int argc, char **argv) {
-    shell_printf(sh, "tr: requires stdin pipe (use with echo ... | tr)\n");
-    return 1;
+    if (argc < 3) {
+        shell_printf(sh, "usage: tr [-d] [-s] set1 [set2] [file]\n");
+        return 1;
+    }
+
+    int delete_mode = 0;
+    int squeeze_mode = 0;
+    int opt_end = 1;
+
+    for (int i = 1; i < argc && argv[i][0] == '-'; i++) {
+        if (strcmp(argv[i], "-d") == 0) { delete_mode = 1; opt_end = i + 1; }
+        else if (strcmp(argv[i], "-s") == 0) { squeeze_mode = 1; opt_end = i + 1; }
+    }
+
+    const char *set1 = (opt_end < argc) ? argv[opt_end] : "";
+    const char *set2 = (!delete_mode && opt_end + 1 < argc) ? argv[opt_end + 1] : "";
+
+    // Build translation table
+    char map[256];
+    for (int i = 0; i < 256; i++) map[i] = (char)i;
+
+    // Expand ranges like a-z, A-Z, 0-9
+    char expanded1[256] = "", expanded2[256] = "";
+    int e1len = 0, e2len = 0;
+
+    for (const char *p = set1; *p && e1len < 255; p++) {
+        if (*(p+1) == '-' && *(p+2)) {
+            char start = *p, end = *(p+2);
+            for (char c = start; c <= end && e1len < 255; c++) expanded1[e1len++] = c;
+            p += 2;
+        } else {
+            expanded1[e1len++] = *p;
+        }
+    }
+    expanded1[e1len] = '\0';
+
+    for (const char *p = set2; *p && e2len < 255; p++) {
+        if (*(p+1) == '-' && *(p+2)) {
+            char start = *p, end = *(p+2);
+            for (char c = start; c <= end && e2len < 255; c++) expanded2[e2len++] = c;
+            p += 2;
+        } else {
+            expanded2[e2len++] = *p;
+        }
+    }
+    expanded2[e2len] = '\0';
+
+    if (!delete_mode) {
+        for (int i = 0; i < e1len; i++) {
+            unsigned char from = (unsigned char)expanded1[i];
+            char to = (i < e2len) ? expanded2[i] : (e2len > 0 ? expanded2[e2len - 1] : expanded1[i]);
+            map[from] = to;
+        }
+    }
+
+    // Find input file — last arg if it doesn't start with -
+    int file_arg = -1;
+    int expected_args = opt_end + (delete_mode ? 1 : 2);
+    if (argc > expected_args) file_arg = argc - 1;
+
+    FILE *f = NULL;
+    if (file_arg >= 0) {
+        char path[SHELL_MAX_PATH * 2];
+        resolve_path(sh, argv[file_arg], path, sizeof(path));
+        f = fopen(path, "r");
+    }
+
+    if (!f) {
+        shell_printf(sh, "tr: no input\n");
+        return 1;
+    }
+
+    char line[SHELL_MAX_LINE];
+    char prev = 0;
+    while (fgets(line, sizeof(line), f)) {
+        for (int i = 0; line[i]; i++) {
+            unsigned char c = (unsigned char)line[i];
+            if (delete_mode) {
+                if (!strchr(expanded1, (char)c)) {
+                    shell_printf(sh, "%c", (char)c);
+                    prev = (char)c;
+                }
+            } else {
+                char out = map[c];
+                if (squeeze_mode && out == prev && strchr(expanded1, (char)c)) continue;
+                shell_printf(sh, "%c", out);
+                prev = out;
+            }
+        }
+    }
+
+    fclose(f);
+    return 0;
 }
 
 int cmd_cut(Shell *sh, int argc, char **argv) {
-    if (argc < 4) {
-        shell_printf(sh, "usage: cut -d delimiter -f field file\n");
+    if (argc < 3) {
+        shell_printf(sh, "usage: cut -d<delim> -f<fields> [-c<range>] file\n");
         return 1;
     }
 
     char delim = '\t';
-    int field = 1;
+    int fields[32] = {0};
+    int field_count = 0;
+    int char_start = 0, char_end = 0;
+    int char_mode = 0;
     int file_arg = -1;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-d") == 0 && i + 1 < argc) {
-            delim = argv[++i][0];
-        } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
-            field = atoi(argv[++i]);
+        if (strncmp(argv[i], "-d", 2) == 0) {
+            // Handle both: -d ':' (two args) and -d':' (one arg)
+            if (argv[i][2] != '\0') {
+                delim = argv[i][2]; // -d':'  → delim is the char after -d
+            } else if (i + 1 < argc) {
+                delim = argv[++i][0]; // -d ':' → next arg
+            }
+        } else if (strncmp(argv[i], "-f", 2) == 0) {
+            // Handle -f2 or -f 2 or -f1,3
+            const char *fval = argv[i][2] ? &argv[i][2] : (i + 1 < argc ? argv[++i] : "1");
+            // Parse comma-separated field numbers
+            const char *p = fval;
+            while (*p && field_count < 32) {
+                fields[field_count++] = atoi(p);
+                while (*p && *p != ',') p++;
+                if (*p == ',') p++;
+            }
+        } else if (strncmp(argv[i], "-c", 2) == 0) {
+            char_mode = 1;
+            const char *cval = argv[i][2] ? &argv[i][2] : (i + 1 < argc ? argv[++i] : "1");
+            // Parse range like 1-3
+            char_start = atoi(cval);
+            const char *dash = strchr(cval, '-');
+            char_end = dash ? atoi(dash + 1) : char_start;
         } else {
             file_arg = i;
         }
+    }
+
+    if (field_count == 0 && !char_mode) {
+        fields[0] = 1;
+        field_count = 1;
     }
 
     if (file_arg < 0) {
@@ -411,7 +563,7 @@ int cmd_cut(Shell *sh, int argc, char **argv) {
         return 1;
     }
 
-    char path[SHELL_MAX_PATH];
+    char path[SHELL_MAX_PATH * 2];
     resolve_path(sh, argv[file_arg], path, sizeof(path));
 
     FILE *f = fopen(path, "r");
@@ -422,23 +574,46 @@ int cmd_cut(Shell *sh, int argc, char **argv) {
 
     char line[SHELL_MAX_LINE];
     while (fgets(line, sizeof(line), f)) {
-        char *p = line;
-        int current_field = 1;
-        char *field_start = p;
+        // Remove trailing newline for processing
+        int len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
 
-        while (*p) {
-            if (*p == delim || *p == '\n') {
-                if (current_field == field) {
-                    char save = *p;
-                    *p = '\0';
-                    shell_printf(sh, "%s\n", field_start);
-                    *p = save;
-                    break;
-                }
-                current_field++;
-                field_start = p + 1;
+        if (char_mode) {
+            // Character range mode: -c1-3
+            for (int i = char_start - 1; i < char_end && i < len; i++) {
+                if (i >= 0) shell_printf(sh, "%c", line[i]);
             }
-            p++;
+            shell_printf(sh, "\n");
+        } else {
+            // Field mode: split by delimiter
+            char *tokens[256];
+            int token_count = 0;
+            char linecopy[SHELL_MAX_LINE];
+            strncpy(linecopy, line, sizeof(linecopy) - 1);
+            linecopy[sizeof(linecopy) - 1] = '\0';
+
+            // Split into tokens
+            char *p = linecopy;
+            tokens[token_count++] = p;
+            while (*p && token_count < 256) {
+                if (*p == delim) {
+                    *p = '\0';
+                    tokens[token_count++] = p + 1;
+                }
+                p++;
+            }
+
+            // Output requested fields
+            int first = 1;
+            for (int fi = 0; fi < field_count; fi++) {
+                int idx = fields[fi] - 1;
+                if (idx >= 0 && idx < token_count) {
+                    if (!first) shell_printf(sh, "%c", delim);
+                    shell_printf(sh, "%s", tokens[idx]);
+                    first = 0;
+                }
+            }
+            shell_printf(sh, "\n");
         }
     }
 
