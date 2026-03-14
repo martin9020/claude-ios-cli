@@ -41,11 +41,39 @@ void shell_set_npm_handler(node_handler_fn handler) {
 
 int cmd_echo(Shell *sh, int argc, char **argv) {
     int newline = 1;
+    int interpret_escapes = 0;
     int start = 1;
-    if (argc > 1 && strcmp(argv[1], "-n") == 0) { newline = 0; start = 2; }
+
+    // Parse flags
+    while (start < argc && argv[start][0] == '-') {
+        if (strcmp(argv[start], "-n") == 0) { newline = 0; start++; }
+        else if (strcmp(argv[start], "-e") == 0) { interpret_escapes = 1; start++; }
+        else break;
+    }
+
     for (int i = start; i < argc; i++) {
         if (i > start) shell_printf(sh, " ");
-        shell_printf(sh, "%s", argv[i]);
+        if (interpret_escapes) {
+            const char *p = argv[i];
+            while (*p) {
+                if (*p == '\\' && *(p + 1)) {
+                    p++;
+                    switch (*p) {
+                        case 'n': shell_printf(sh, "\n"); break;
+                        case 't': shell_printf(sh, "\t"); break;
+                        case '\\': shell_printf(sh, "\\"); break;
+                        case 'r': shell_printf(sh, "\r"); break;
+                        case '0': shell_printf(sh, "\0"); break;
+                        default: shell_printf(sh, "\\%c", *p); break;
+                    }
+                } else {
+                    shell_printf(sh, "%c", *p);
+                }
+                p++;
+            }
+        } else {
+            shell_printf(sh, "%s", argv[i]);
+        }
     }
     if (newline) shell_printf(sh, "\n");
     return 0;

@@ -127,8 +127,11 @@ static char *expand_vars(Shell *sh, const char *input) {
     int ri = 0;
     const char *p = input;
 
+    int in_single_quote = 0;
     while (*p && ri < SHELL_MAX_LINE - 1) {
-        if (*p == '$') {
+        if (*p == '\'' && !in_single_quote) { in_single_quote = 1; result[ri++] = *p++; continue; }
+        if (*p == '\'' && in_single_quote) { in_single_quote = 0; result[ri++] = *p++; continue; }
+        if (*p == '$' && !in_single_quote) {
             p++;
             if (*p == '{') {
                 // ${VAR}

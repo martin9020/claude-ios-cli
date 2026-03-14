@@ -418,17 +418,35 @@ int cmd_chmod(Shell *sh, int argc, char **argv) {
 }
 
 int cmd_du(Shell *sh, int argc, char **argv) {
-    char path[SHELL_MAX_PATH];
-    if (argc >= 2) resolve_path(sh, argv[1], path, sizeof(path));
-    else strncpy(path, sh->cwd, sizeof(path));
+    int human = 0;
+    const char *target = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0) human = 1;
+        else target = argv[i];
+    }
+
+    char path[SHELL_MAX_PATH * 2];
+    if (target) resolve_path(sh, target, path, sizeof(path));
+    else strncpy(path, sh->cwd, sizeof(path) - 1);
 
     struct stat st;
     if (stat(path, &st) != 0) {
-        shell_printf(sh, "du: %s: %s\n", argc >= 2 ? argv[1] : ".", strerror(errno));
+        shell_printf(sh, "du: %s: %s\n", target ? target : ".", strerror(errno));
         return 1;
     }
-    shell_printf(sh, "%lld\t%s\n", (long long)(st.st_size / 1024),
-                 argc >= 2 ? argv[1] : ".");
+
+    long long bytes = (long long)st.st_size;
+    if (human) {
+        if (bytes >= 1024 * 1024)
+            shell_printf(sh, "%.1fM\t%s\n", bytes / (1024.0 * 1024.0), target ? target : ".");
+        else if (bytes >= 1024)
+            shell_printf(sh, "%.1fK\t%s\n", bytes / 1024.0, target ? target : ".");
+        else
+            shell_printf(sh, "%lldB\t%s\n", bytes, target ? target : ".");
+    } else {
+        shell_printf(sh, "%lld\t%s\n", bytes / 1024, target ? target : ".");
+    }
     return 0;
 }
 

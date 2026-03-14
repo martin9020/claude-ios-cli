@@ -137,6 +137,9 @@ int cmd_tail(Shell *sh, int argc, char **argv) {
     if (argc >= 3 && strcmp(argv[1], "-n") == 0) {
         lines = atoi(argv[2]);
         file_arg = 3;
+    } else if (argc >= 2 && argv[1][0] == '-' && argv[1][1] >= '0' && argv[1][1] <= '9') {
+        lines = atoi(argv[1] + 1);
+        file_arg = 2;
     }
 
     if (file_arg >= argc) {
