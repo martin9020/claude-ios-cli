@@ -29,13 +29,14 @@ class NpmManager {
     }
 
     /// Install the @anthropic-ai/claude-code package from npm
+    /// Only installs the main package (no dependencies) — we just need it for OAuth client_id extraction
     /// Returns 0 on success, 1 on failure
     func installClaudeCode(output: @escaping (String) -> Void) -> Int32 {
         // Create scoped directory for @anthropic-ai
         let scopeDir = nodeModulesPath + "/@anthropic-ai"
         try? FileManager.default.createDirectory(atPath: scopeDir,
                                                    withIntermediateDirectories: true)
-        return installPackage(name: "@anthropic-ai/claude-code", output: output)
+        return installPackage(name: "@anthropic-ai/claude-code", output: output, skipDeps: true)
     }
 
     /// Handle `npm` command with subcommands
@@ -92,7 +93,7 @@ class NpmManager {
 
     // MARK: - Install
 
-    private func installPackage(name: String, output: @escaping (String) -> Void) -> Int32 {
+    private func installPackage(name: String, output: @escaping (String) -> Void, skipDeps: Bool = false) -> Int32 {
         // Cycle detection
         if installingPackages.contains(name) {
             return 0 // Already installing, skip
@@ -191,21 +192,42 @@ class NpmManager {
 
         output("npm: downloading \(packageName)@\(version)...\n")
 
-        // 3. Download tarball
+        // 3. Download tarball (with 120s timeout)
         var tarballData: Data?
+        var dlError: String?
         let dlSemaphore = DispatchSemaphore(value: 0)
 
-        let dlTask = URLSession.shared.dataTask(with: tarballURL) { data, _, error in
-            if error == nil { tarballData = data }
+        var dlRequest = URLRequest(url: tarballURL)
+        dlRequest.timeoutInterval = 120
+
+        let dlTask = URLSession.shared.dataTask(with: dlRequest) { data, response, error in
+            if let error = error {
+                dlError = error.localizedDescription
+            } else if let data = data {
+                tarballData = data
+            }
             dlSemaphore.signal()
         }
         dlTask.resume()
-        dlSemaphore.wait()
+
+        let dlTimeout = dlSemaphore.wait(timeout: .now() + 120)
+        if dlTimeout == .timedOut {
+            dlTask.cancel()
+            output("npm ERR! download timed out (package may be too large)\n")
+            return 1
+        }
+
+        if let err = dlError {
+            output("npm ERR! download failed: \(err)\n")
+            return 1
+        }
 
         guard let tgzData = tarballData else {
             output("npm ERR! failed to download package\n")
             return 1
         }
+
+        output("npm: downloaded \(tgzData.count / 1024)KB\n")
 
         // 4. Extract tarball
         let packageDir = nodeModulesPath + "/" + packageName
@@ -258,7 +280,7 @@ class NpmManager {
         }
 
         // 5. Install dependencies (top-level only, no deep resolution)
-        if let deps = versionInfo["dependencies"] as? [String: String] {
+        if !skipDeps, let deps = versionInfo["dependencies"] as? [String: String] {
             let depCount = deps.count
             if depCount > 0 {
                 output("npm: installing \(depCount) dependencies...\n")
