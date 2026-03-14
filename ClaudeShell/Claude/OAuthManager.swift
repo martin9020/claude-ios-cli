@@ -93,9 +93,9 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
     /// Called when user pastes the authorization code
     func submitAuthCode(_ code: String) {
-        let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanCode = extractCode(from: code)
         guard !cleanCode.isEmpty else {
-            statusMessage = "Please enter a code"
+            statusMessage = "Please enter a valid code"
             return
         }
         guard codeVerifier != nil else {
@@ -107,6 +107,30 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         awaitingCode = false
         statusMessage = "Exchanging code..."
         exchangeCodeForTokens(code: cleanCode)
+    }
+
+    /// Extract the authorization code from whatever the user pasted.
+    /// Handles: plain code, full callback URL, URL-encoded code, extra whitespace.
+    private func extractCode(from input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // If it looks like a URL with a code parameter, extract it
+        if trimmed.contains("code=") {
+            if let components = URLComponents(string: trimmed),
+               let codeParam = components.queryItems?.first(where: { $0.name == "code" })?.value {
+                return codeParam.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            // Fallback: regex extract after "code="
+            if let range = trimmed.range(of: "code=") {
+                let afterCode = String(trimmed[range.upperBound...])
+                let code = afterCode.components(separatedBy: "&").first ?? afterCode
+                return code.removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ?? code.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // URL-decode if needed
+        return trimmed.removingPercentEncoding ?? trimmed
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
