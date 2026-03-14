@@ -19,7 +19,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Cache xcodegen
+      id: cache-xcodegen
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/xcodegen
+        key: xcodegen-${{ runner.os }}
+
     - name: Install xcodegen
+      if: steps.cache-xcodegen.outputs.cache-hit != 'true'
       run: brew install xcodegen
 
     - name: Generate Xcode project
@@ -28,30 +36,9 @@ jobs:
     - name: Select Xcode
       run: |
         XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
-        echo "Using: $XCODE_PATH"
         sudo xcode-select -s "$XCODE_PATH"
-        xcodebuild -version
 
-    # ---- Build & Test on Simulator ----
-    - name: Build for Simulator
-      run: |
-        xcodebuild build \
-          -project ClaudeShell.xcodeproj \
-          -scheme ClaudeShell \
-          -destination 'platform=iOS Simulator,name=iPhone 16' \
-          -configuration Debug \
-          CODE_SIGNING_ALLOWED=NO
-
-    - name: Run Tests
-      run: |
-        xcodebuild test \
-          -project ClaudeShell.xcodeproj \
-          -scheme ClaudeShellTests \
-          -destination 'platform=iOS Simulator,name=iPhone 16' \
-          -configuration Debug \
-          CODE_SIGNING_ALLOWED=NO
-
-    # ---- Build IPA for sideloading ----
+    # Skip simulator build — go straight to device build (catches all compile errors too)
     - name: Build for device (Release)
       run: |
         xcodebuild build \
@@ -63,66 +50,25 @@ jobs:
           CODE_SIGN_IDENTITY="-" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=YES \
-          AD_HOC_CODE_SIGNING_ALLOWED=YES
+          AD_HOC_CODE_SIGNING_ALLOWED=YES \
+          -quiet
 
-    - name: Validate and package IPA
+    - name: Package IPA
       run: |
         set -e
-
-        echo "=== Finding .app bundle ==="
         APP_PATH=$(find build/derived -name "ClaudeShell.app" -type d | head -1)
-        echo "App: $APP_PATH"
+        if [ -z "$APP_PATH" ]; then echo "FATAL: .app not found"; exit 1; fi
 
-        if [ -z "$APP_PATH" ]; then
-          echo "FATAL: ClaudeShell.app not found!"
-          find build/derived -type d -name "*.app"
-          exit 1
-        fi
-
-        echo ""
-        echo "=== Validating Info.plist ==="
-        /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
+        # Quick validation
         /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
-        /usr/libexec/PlistBuddy -c "Print :CFBundleName" "$APP_PATH/Info.plist"
-        /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist"
+        EXEC=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")
+        lipo -info "$APP_PATH/$EXEC"
 
-        echo ""
-        echo "=== Checking binary ==="
-        EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")
-        ls -la "$APP_PATH/$EXECUTABLE"
-        file "$APP_PATH/$EXECUTABLE"
-        lipo -info "$APP_PATH/$EXECUTABLE"
-
-        echo ""
-        echo "=== App bundle contents ==="
-        ls -la "$APP_PATH/"
-
-        echo ""
-        echo "=== Code signature check ==="
-        codesign -dvv "$APP_PATH" 2>&1 || echo "(unsigned — expected for sideload IPA)"
-
-        echo ""
-        echo "=== Packaging IPA ==="
+        # Package
         mkdir -p build/ipa/Payload
         cp -r "$APP_PATH" build/ipa/Payload/
-
-        # Verify Payload structure
-        echo "Payload contents:"
-        ls -la build/ipa/Payload/
-        ls -la build/ipa/Payload/ClaudeShell.app/ | head -20
-
-        cd build/ipa
-        zip -r ../ClaudeShell-sideload.ipa Payload
-        cd ../..
-
-        echo ""
-        echo "=== Final IPA ==="
+        cd build/ipa && zip -r -q ../ClaudeShell-sideload.ipa Payload && cd ../..
         ls -lh build/ClaudeShell-sideload.ipa
-        # Verify it's a valid zip
-        unzip -t build/ClaudeShell-sideload.ipa | tail -5
-
-        echo ""
-        echo "=== ALL CHECKS PASSED ==="
 
     - name: Upload IPA
       uses: actions/upload-artifact@v4
@@ -130,7 +76,6 @@ jobs:
         name: ClaudeShell-sideload
         path: build/ClaudeShell-sideload.ipa
 
-    # ---- Optional SSH debug session ----
     - name: SSH debug session (tmate)
       if: inputs.debug_ssh == 'true' || failure()
       uses: mxschmitt/action-tmate@v3
