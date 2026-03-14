@@ -430,7 +430,10 @@ int cmd_tr(Shell *sh, int argc, char **argv) {
     }
 
     const char *set1 = (opt_end < argc) ? argv[opt_end] : "";
-    const char *set2 = (!delete_mode && opt_end + 1 < argc) ? argv[opt_end + 1] : "";
+    // set2 only used for translate mode (not delete-only or squeeze-only)
+    // In squeeze/delete mode, the arg after set1 is the input file (from pipe)
+    int needs_set2 = !delete_mode && !squeeze_mode;
+    const char *set2 = (needs_set2 && opt_end + 1 < argc) ? argv[opt_end + 1] : "";
 
     // Build translation table
     char map[256];
