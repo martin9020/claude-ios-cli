@@ -147,6 +147,7 @@ class ClaudeEngine {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAuth(auth, to: &request)
         request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.timeoutInterval = 120
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -241,6 +242,7 @@ class ClaudeEngine {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAuth(auth, to: &request)
         request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.timeoutInterval = 120
 
         let semaphore = DispatchSemaphore(value: 0)
