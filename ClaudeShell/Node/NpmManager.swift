@@ -253,8 +253,9 @@ class NpmManager {
         try? FileManager.default.createDirectory(atPath: packageDir,
                                                    withIntermediateDirectories: true)
 
-        // Save the tarball temporarily
-        let tmpTgz = sandboxRoot + "/tmp/\(packageName).tgz"
+        // Save the tarball temporarily (use safe filename — replace / with -)
+        let safeName = packageName.replacingOccurrences(of: "/", with: "-")
+        let tmpTgz = sandboxRoot + "/tmp/\(safeName).tgz"
         try? FileManager.default.createDirectory(atPath: sandboxRoot + "/tmp",
                                                    withIntermediateDirectories: true)
 
@@ -266,11 +267,13 @@ class NpmManager {
         }
 
         // Extract using a simple tar.gz parser
+        output("npm: decompressing \(tgzData.count / 1024)KB...\n")
         let extracted = extractTarGz(from: tmpTgz, to: packageDir)
         try? FileManager.default.removeItem(atPath: tmpTgz)
 
         if !extracted {
-            // Fallback: save package.json and a stub
+            output("npm: tarball extraction failed, saving metadata only...\n")
+            // Fallback: save package.json with version info from registry
             let pkgJson: [String: Any] = [
                 "name": packageName,
                 "version": version,
@@ -281,9 +284,11 @@ class NpmManager {
             }
             try? "// Package: \(packageName)@\(version)\n// Downloaded from npm registry\nmodule.exports = {};\n"
                 .write(toFile: packageDir + "/index.js", atomically: true, encoding: .utf8)
-            output("npm: installed \(packageName)@\(version) (metadata only — tarball extraction limited on iOS)\n")
+            output("npm: installed \(packageName)@\(version) (metadata only)\n")
         } else {
-            output("npm: installed \(packageName)@\(version)\n")
+            // Count extracted files
+            let fileCount = (try? FileManager.default.contentsOfDirectory(atPath: packageDir))?.count ?? 0
+            output("npm: installed \(packageName)@\(version) (\(fileCount) files)\n")
         }
 
         // 5. Install dependencies (top-level only, no deep resolution)
@@ -526,11 +531,11 @@ class NpmManager {
                 )
             }
 
-            if decodedSize > 0 && decodedSize < bufferSize {
+            if decodedSize > 0 {
                 return Data(bytes: destinationBuffer, count: decodedSize)
             }
 
-            // Buffer was too small, try doubling
+            // Buffer was too small or decompression failed, try doubling
             if attempt < 2 {
                 bufferSize = min(bufferSize * 2, 256 * 1024 * 1024)
             }

@@ -65,18 +65,14 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         // Compute code_challenge = base64url(SHA256(verifier))
         let challenge = generateCodeChallenge(from: verifier)
 
-        // Build authorize URL
-        var components = URLComponents(string: authorizeEndpoint)!
-        components.queryItems = [
-            URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "redirect_uri", value: "\(callbackScheme)://oauth/callback"),
-            URLQueryItem(name: "code_challenge", value: challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "scope", value: "user:inference")
-        ]
+        // Build authorize URL manually to avoid URLComponents encoding colons in scope
+        let redirectUri = "\(callbackScheme)://oauth/callback"
+        let scopes = "user:inference user:sessions:claude_code"
+        let encodedRedirect = redirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? redirectUri
+        let encodedChallenge = challenge.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? challenge
+        let authURLString = "\(authorizeEndpoint)?client_id=\(clientId)&response_type=code&redirect_uri=\(encodedRedirect)&code_challenge=\(encodedChallenge)&code_challenge_method=S256&scope=\(scopes.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? scopes)"
 
-        guard let authURL = components.url else {
+        guard let authURL = URL(string: authURLString) else {
             statusMessage = "Failed to build auth URL"
             isLoading = false
             return
