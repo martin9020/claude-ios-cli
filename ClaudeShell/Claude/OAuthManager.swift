@@ -109,27 +109,31 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     }
 
     /// Extract the authorization code from whatever the user pasted.
-    /// Handles: plain code, full callback URL, URL-encoded code, extra whitespace.
+    /// The callback URL format is: ...?code=XXXXX#fragment
+    /// The # separates the code from a URL fragment — only the part before # is the code.
     private func extractCode(from input: String) -> String {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // If it looks like a URL with a code parameter, extract it
-        if trimmed.contains("code=") {
-            if let components = URLComponents(string: trimmed),
-               let codeParam = components.queryItems?.first(where: { $0.name == "code" })?.value {
-                return codeParam.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            // Fallback: regex extract after "code="
-            if let range = trimmed.range(of: "code=") {
-                let afterCode = String(trimmed[range.upperBound...])
-                let code = afterCode.components(separatedBy: "&").first ?? afterCode
-                return code.removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ?? code.trimmingCharacters(in: .whitespacesAndNewlines)
+        // If it's a full URL with code= parameter, extract the code value
+        if text.contains("code=") {
+            if let range = text.range(of: "code=") {
+                text = String(text[range.upperBound...])
+                // Stop at & (next param) or end
+                if let ampRange = text.range(of: "&") {
+                    text = String(text[..<ampRange.lowerBound])
+                }
             }
         }
 
+        // Strip URL fragment (#...) — the part after # is NOT part of the auth code
+        if let hashIndex = text.firstIndex(of: "#") {
+            text = String(text[..<hashIndex])
+        }
+
         // URL-decode if needed
-        return trimmed.removingPercentEncoding ?? trimmed
+        text = text.removingPercentEncoding ?? text
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
