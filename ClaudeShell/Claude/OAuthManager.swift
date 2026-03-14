@@ -2,8 +2,10 @@ import Foundation
 import AuthenticationServices
 import CryptoKit
 import Security
+import Network
 
-/// Manages OAuth PKCE authentication with Anthropic for Claude Pro/Max subscriptions
+/// Manages OAuth PKCE authentication with Anthropic for Claude Pro/Max subscriptions.
+/// Uses a local HTTP server for the redirect URI (same approach as Claude Code CLI).
 class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = OAuthManager()
 
@@ -12,9 +14,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     @Published var statusMessage: String = ""
 
     private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
-    // Use claude.ai authorize endpoint (platform.claude.com may redirect and drop params)
     private let authorizeEndpoint = "https://claude.ai/oauth/authorize"
-    private let callbackScheme = "claudeshell"
 
     /// Official Claude Code OAuth client_id (from @anthropic-ai/claude-code npm package)
     private let officialClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -26,30 +26,26 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     private let keychainClientId = "com.claudeshell.oauth.clientId"
 
     private var codeVerifier: String?
+    private var localServer: NWListener?
+    private var serverPort: UInt16 = 0
 
     override init() {
         super.init()
-        // Check if we have stored tokens
         isSignedIn = loadFromKeychain(key: keychainAccessToken) != nil
     }
 
-    // MARK: - Client ID Extraction
+    // MARK: - Client ID
 
-    /// Get the OAuth client_id — uses the official hardcoded value from Claude Code,
-    /// or falls back to keychain/env override
     func extractClientId() -> String? {
-        // Check for env override first (CLAUDE_CODE_OAUTH_CLIENT_ID)
         if let cached = loadFromKeychain(key: keychainClientId) {
             return cached
         }
-        // Use the official client_id from the Claude Code npm package
         saveToKeychain(key: keychainClientId, value: officialClientId)
         return officialClientId
     }
 
-    // MARK: - OAuth PKCE Flow
+    // MARK: - OAuth PKCE Flow with Local HTTP Server
 
-    /// Start the OAuth PKCE authentication flow
     func startOAuthFlow(from window: UIWindow? = nil) {
         guard let clientId = extractClientId() else {
             statusMessage = "Could not get OAuth client_id"
@@ -57,49 +53,68 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         }
 
         isLoading = true
-        statusMessage = "Opening login..."
+        statusMessage = "Starting login server..."
 
-        // Generate PKCE code verifier (43-128 chars, URL-safe)
-        let verifier = generateCodeVerifier()
-        self.codeVerifier = verifier
+        // Start local HTTP server to receive the OAuth callback
+        startLocalServer { [weak self] port in
+            guard let self = self, let port = port else {
+                DispatchQueue.main.async {
+                    self?.statusMessage = "Failed to start local server"
+                    self?.isLoading = false
+                }
+                return
+            }
 
-        // Compute code_challenge = base64url(SHA256(verifier))
-        let challenge = generateCodeChallenge(from: verifier)
+            self.serverPort = port
+            let redirectUri = "http://localhost:\(port)/oauth/callback"
 
-        // Generate random state for CSRF protection
-        let state = generateCodeVerifier() // reuse the random string generator
+            // Generate PKCE
+            let verifier = self.generateCodeVerifier()
+            self.codeVerifier = verifier
+            let challenge = self.generateCodeChallenge(from: verifier)
+            let state = self.generateCodeVerifier()
 
-        // Build authorize URL — construct percent-encoded query manually
-        // to ensure colons stay unencoded and spaces become %20
-        let redirectUri = "\(callbackScheme)://oauth/callback"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-        let scope = "user:inference%20user:sessions:claude_code"
+            // Build authorize URL
+            let scope = "user:inference%20user:sessions:claude_code"
+            let encodedRedirect = redirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+            let queryString = [
+                "client_id=\(clientId)",
+                "response_type=code",
+                "redirect_uri=\(encodedRedirect)",
+                "code_challenge=\(challenge)",
+                "code_challenge_method=S256",
+                "scope=\(scope)",
+                "state=\(state)"
+            ].joined(separator: "&")
 
-        let queryString = [
-            "client_id=\(clientId)",
-            "response_type=code",
-            "redirect_uri=\(redirectUri)",
-            "code_challenge=\(challenge)",
-            "code_challenge_method=S256",
-            "scope=\(scope)",
-            "state=\(state)"
-        ].joined(separator: "&")
+            var components = URLComponents(string: self.authorizeEndpoint)!
+            components.percentEncodedQuery = queryString
 
-        var components = URLComponents(string: authorizeEndpoint)!
-        components.percentEncodedQuery = queryString
+            guard let authURL = components.url else {
+                DispatchQueue.main.async {
+                    self.statusMessage = "Failed to build auth URL"
+                    self.isLoading = false
+                }
+                return
+            }
 
-        guard let authURL = components.url else {
-            statusMessage = "Failed to build auth URL"
-            isLoading = false
-            return
+            DispatchQueue.main.async {
+                self.statusMessage = "Opening login..."
+                self.openAuthInBrowser(url: authURL, clientId: clientId, redirectUri: redirectUri)
+            }
         }
+    }
 
-        // Use ASWebAuthenticationSession for secure browser-based login
+    /// Open the auth URL using ASWebAuthenticationSession with http scheme
+    private func openAuthInBrowser(url: URL, clientId: String, redirectUri: String) {
+        // Use ASWebAuthenticationSession — it will show the in-app browser
+        // We use "http" as callback scheme so it intercepts the localhost redirect
         let session = ASWebAuthenticationSession(
-            url: authURL,
-            callbackURLScheme: callbackScheme
+            url: url,
+            callbackURLScheme: "http"
         ) { [weak self] callbackURL, error in
             guard let self = self else { return }
+            self.stopLocalServer()
 
             DispatchQueue.main.async {
                 if let error = error {
@@ -120,8 +135,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                     return
                 }
 
-                // Exchange code for tokens
-                self.exchangeCodeForTokens(code: code, clientId: clientId)
+                self.exchangeCodeForTokens(code: code, clientId: clientId, redirectUri: redirectUri)
             }
         }
 
@@ -130,7 +144,6 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         session.start()
     }
 
-    /// ASWebAuthenticationPresentationContextProviding
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         return UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -138,10 +151,75 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
             .first(where: { $0.isKeyWindow }) ?? ASPresentationAnchor()
     }
 
+    // MARK: - Local HTTP Server
+
+    private func startLocalServer(completion: @escaping (UInt16?) -> Void) {
+        // Use NWListener to create a TCP server on a random available port
+        let params = NWParameters.tcp
+        guard let listener = try? NWListener(using: params, on: .any) else {
+            completion(nil)
+            return
+        }
+
+        self.localServer = listener
+
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                if let port = listener.port?.rawValue {
+                    completion(port)
+                } else {
+                    completion(nil)
+                }
+            case .failed:
+                completion(nil)
+            default:
+                break
+            }
+        }
+
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.handleConnection(connection)
+        }
+
+        listener.start(queue: DispatchQueue.global(qos: .userInitiated))
+    }
+
+    private func handleConnection(_ connection: NWConnection) {
+        connection.start(queue: DispatchQueue.global(qos: .userInitiated))
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
+            guard let data = data, let request = String(data: data, encoding: .utf8) else {
+                connection.cancel()
+                return
+            }
+
+            // Send a simple success response
+            let html = """
+            <html><head><title>ClaudeShell</title></head>
+            <body style="font-family:system-ui;text-align:center;padding:60px">
+            <h1>Authorization successful!</h1>
+            <p>You can close this window and return to ClaudeShell.</p>
+            </body></html>
+            """
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
+            connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ _ in
+                connection.cancel()
+            }))
+
+            // We don't need to extract the code here — ASWebAuthenticationSession
+            // intercepts the redirect URL before it reaches our server
+            _ = request // suppress unused warning
+        }
+    }
+
+    private func stopLocalServer() {
+        localServer?.cancel()
+        localServer = nil
+    }
+
     // MARK: - Token Exchange
 
-    /// Exchange auth code for access + refresh tokens
-    private func exchangeCodeForTokens(code: String, clientId: String) {
+    private func exchangeCodeForTokens(code: String, clientId: String, redirectUri: String) {
         guard let verifier = codeVerifier else {
             statusMessage = "Missing code verifier"
             isLoading = false
@@ -161,7 +239,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         let body: [String: String] = [
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": "\(callbackScheme)://oauth/callback",
+            "redirect_uri": redirectUri,
             "client_id": clientId,
             "code_verifier": verifier
         ]
@@ -195,17 +273,14 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                     return
                 }
 
-                // Store tokens
                 self.saveToKeychain(key: self.keychainAccessToken, value: accessToken)
 
                 if let refreshToken = json["refresh_token"] as? String {
                     self.saveToKeychain(key: self.keychainRefreshToken, value: refreshToken)
                 }
 
-                // Store expiry (default 8 hours)
                 let expiresIn = json["expires_in"] as? Int ?? 28800
-                let expiry = Date().addingTimeInterval(TimeInterval(expiresIn))
-                    .timeIntervalSince1970
+                let expiry = Date().addingTimeInterval(TimeInterval(expiresIn)).timeIntervalSince1970
                 self.saveToKeychain(key: self.keychainTokenExpiry,
                                    value: String(format: "%.0f", expiry))
 
@@ -217,41 +292,31 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
     // MARK: - Token Management
 
-    /// Get current valid access token (refreshes if expired)
     func getToken() -> String? {
         guard let token = loadFromKeychain(key: keychainAccessToken) else {
             return nil
         }
-
-        // Check if token is expired
         if isTokenExpired() {
-            // Try to refresh
             let semaphore = DispatchSemaphore(value: 0)
             var refreshedToken: String?
-
             refreshToken { newToken in
                 refreshedToken = newToken
                 semaphore.signal()
             }
-
             semaphore.wait()
             return refreshedToken
         }
-
         return token
     }
 
-    /// Check if the access token is expired
     private func isTokenExpired() -> Bool {
         guard let expiryStr = loadFromKeychain(key: keychainTokenExpiry),
               let expiry = Double(expiryStr) else {
             return true
         }
-        // Refresh 5 minutes before actual expiry
         return Date().timeIntervalSince1970 > (expiry - 300)
     }
 
-    /// Refresh the access token using the refresh token
     func refreshToken(completion: @escaping (String?) -> Void) {
         guard let refreshToken = loadFromKeychain(key: keychainRefreshToken),
               let clientId = loadFromKeychain(key: keychainClientId),
@@ -273,7 +338,6 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
             "refresh_token": refreshToken,
             "client_id": clientId
         ]
-
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
@@ -291,25 +355,18 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
             }
 
             self.saveToKeychain(key: self.keychainAccessToken, value: newAccessToken)
-
             if let newRefresh = json["refresh_token"] as? String {
                 self.saveToKeychain(key: self.keychainRefreshToken, value: newRefresh)
             }
-
             let expiresIn = json["expires_in"] as? Int ?? 28800
             let expiry = Date().addingTimeInterval(TimeInterval(expiresIn)).timeIntervalSince1970
             self.saveToKeychain(key: self.keychainTokenExpiry,
                                value: String(format: "%.0f", expiry))
-
-            DispatchQueue.main.async {
-                self.isSignedIn = true
-            }
-
+            DispatchQueue.main.async { self.isSignedIn = true }
             completion(newAccessToken)
         }.resume()
     }
 
-    /// Sign out — remove all stored tokens
     func signOut() {
         deleteFromKeychain(key: keychainAccessToken)
         deleteFromKeychain(key: keychainRefreshToken)
@@ -320,14 +377,12 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
     // MARK: - PKCE Helpers
 
-    /// Generate a random code verifier (43-128 URL-safe chars)
     private func generateCodeVerifier() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes).base64URLEncoded()
     }
 
-    /// Generate code challenge from verifier: base64url(SHA256(verifier))
     private func generateCodeChallenge(from verifier: String) -> String {
         let data = Data(verifier.utf8)
         let hash = SHA256.hash(data: data)
@@ -369,8 +424,6 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         SecItemDelete(query as CFDictionary)
     }
 }
-
-// MARK: - Data Extension for base64url encoding
 
 extension Data {
     func base64URLEncoded() -> String {
