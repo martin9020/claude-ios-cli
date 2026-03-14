@@ -27,6 +27,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     private let keychainClientId = "com.claudeshell.oauth.clientId"
 
     private var codeVerifier: String?
+    private var oauthState: String?
     /// Pending client ID for code exchange after user pastes auth code
     private var pendingClientId: String?
 
@@ -65,6 +66,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         self.codeVerifier = verifier
         let challenge = generateCodeChallenge(from: verifier)
         let state = generateCodeVerifier()
+        self.oauthState = state
 
         // Build authorize URL with manual redirect (shows code on screen)
         let encodedRedirect = manualRedirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
@@ -144,20 +146,19 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        // Anthropic's token endpoint expects JSON (not form-encoded)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
 
-        // Build form body using URLComponents for correct percent encoding
-        var formComponents = URLComponents()
-        formComponents.queryItems = [
-            URLQueryItem(name: "grant_type", value: "authorization_code"),
-            URLQueryItem(name: "code", value: code),
-            URLQueryItem(name: "redirect_uri", value: redirectUri),
-            URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "code_verifier", value: verifier)
+        let body: [String: String] = [
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirectUri,
+            "client_id": clientId,
+            "code_verifier": verifier,
+            "state": oauthState ?? ""
         ]
-        // URLComponents.query percent-encodes values correctly for form bodies
-        // But it encodes space as + which is fine for form-urlencoded
-        request.httpBody = formComponents.percentEncodedQuery?.data(using: .utf8)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -253,15 +254,16 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
 
-        var formComponents = URLComponents()
-        formComponents.queryItems = [
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
-            URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "client_id", value: clientId)
+        let body: [String: Any] = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientId,
+            "scope": "user:inference user:sessions:claude_code"
         ]
-        request.httpBody = formComponents.percentEncodedQuery?.data(using: .utf8)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let self = self else { completion(nil); return }
