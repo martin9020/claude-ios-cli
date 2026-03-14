@@ -9,6 +9,7 @@ struct SettingsView: View {
     @StateObject private var oauthManager = OAuthManager.shared
     @State private var showSafari = false
     @State private var pasteMessage = ""
+    @State private var authCode = ""
 
     var body: some View {
         NavigationView {
@@ -39,20 +40,60 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                         }
                     } else {
-                        // Sign in button — no install step needed, client_id is built-in
-                        Button(action: { oauthManager.startOAuthFlow() }) {
+                        if oauthManager.awaitingCode {
+                            // Step 2: Paste the auth code from browser
+                            Text("Paste the code shown in the browser:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            TextField("Authorization code", text: $authCode)
+                                .font(.system(.body, design: .monospaced))
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+
                             HStack {
-                                if oauthManager.isLoading {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Image(systemName: "person.crop.circle.badge.checkmark")
+                                Button(action: {
+                                    if let clipboard = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                       !clipboard.isEmpty {
+                                        authCode = clipboard
+                                    }
+                                }) {
+                                    HStack {
+                                        Image(systemName: "doc.on.clipboard")
+                                        Text("Paste from Clipboard")
+                                    }
                                 }
-                                Text("Sign in with Claude Pro/Max")
-                                    .fontWeight(.semibold)
+
+                                Spacer()
+
+                                Button(action: {
+                                    let code = authCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if !code.isEmpty {
+                                        oauthManager.submitAuthCode(code)
+                                        authCode = ""
+                                    }
+                                }) {
+                                    Text("Submit")
+                                        .fontWeight(.semibold)
+                                }
+                                .disabled(authCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
+                        } else {
+                            // Step 1: Open browser to sign in
+                            Button(action: { oauthManager.startOAuthFlow() }) {
+                                HStack {
+                                    if oauthManager.isLoading {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "person.crop.circle.badge.checkmark")
+                                    }
+                                    Text("Sign in with Claude Pro/Max")
+                                        .fontWeight(.semibold)
+                                }
+                            }
+                            .disabled(oauthManager.isLoading)
                         }
-                        .disabled(oauthManager.isLoading)
                     }
                 }
 

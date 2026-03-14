@@ -2,7 +2,6 @@ import Foundation
 import AuthenticationServices
 import CryptoKit
 import Security
-import Network
 
 /// Manages OAuth PKCE authentication with Anthropic for Claude Pro/Max subscriptions.
 /// Uses a local HTTP server for the redirect URI (same approach as Claude Code CLI).
@@ -15,6 +14,8 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
 
     private let tokenEndpoint = "https://platform.claude.com/v1/oauth/token"
     private let authorizeEndpoint = "https://claude.ai/oauth/authorize"
+    /// Manual redirect — shows auth code on screen for user to copy
+    private let manualRedirectUri = "https://platform.claude.com/oauth/code/callback"
 
     /// Official Claude Code OAuth client_id (from @anthropic-ai/claude-code npm package)
     private let officialClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -26,8 +27,8 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
     private let keychainClientId = "com.claudeshell.oauth.clientId"
 
     private var codeVerifier: String?
-    private var localServer: NWListener?
-    private var serverPort: UInt16 = 0
+    /// Pending client ID for code exchange after user pastes auth code
+    private var pendingClientId: String?
 
     override init() {
         super.init()
@@ -44,7 +45,10 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         return officialClientId
     }
 
-    // MARK: - OAuth PKCE Flow with Local HTTP Server
+    // MARK: - OAuth PKCE Flow (Manual Code Entry)
+
+    /// Whether we're waiting for the user to paste an auth code
+    @Published var awaitingCode: Bool = false
 
     func startOAuthFlow(from window: UIWindow? = nil) {
         guard let clientId = extractClientId() else {
@@ -53,89 +57,48 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         }
 
         isLoading = true
-        statusMessage = "Starting login server..."
+        statusMessage = "Opening login..."
+        pendingClientId = clientId
 
-        // Start local HTTP server to receive the OAuth callback
-        startLocalServer { [weak self] port in
-            guard let self = self, let port = port else {
-                DispatchQueue.main.async {
-                    self?.statusMessage = "Failed to start local server"
-                    self?.isLoading = false
-                }
-                return
-            }
+        // Generate PKCE
+        let verifier = generateCodeVerifier()
+        self.codeVerifier = verifier
+        let challenge = generateCodeChallenge(from: verifier)
+        let state = generateCodeVerifier()
 
-            self.serverPort = port
-            let redirectUri = "http://localhost:\(port)/oauth/callback"
+        // Build authorize URL with manual redirect (shows code on screen)
+        let encodedRedirect = manualRedirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        let scope = "user:inference%20user:sessions:claude_code"
+        let queryString = [
+            "client_id=\(clientId)",
+            "response_type=code",
+            "redirect_uri=\(encodedRedirect)",
+            "code_challenge=\(challenge)",
+            "code_challenge_method=S256",
+            "scope=\(scope)",
+            "state=\(state)"
+        ].joined(separator: "&")
 
-            // Generate PKCE
-            let verifier = self.generateCodeVerifier()
-            self.codeVerifier = verifier
-            let challenge = self.generateCodeChallenge(from: verifier)
-            let state = self.generateCodeVerifier()
+        var components = URLComponents(string: authorizeEndpoint)!
+        components.percentEncodedQuery = queryString
 
-            // Build authorize URL
-            let scope = "user:inference%20user:sessions:claude_code"
-            let encodedRedirect = redirectUri.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-            let queryString = [
-                "client_id=\(clientId)",
-                "response_type=code",
-                "redirect_uri=\(encodedRedirect)",
-                "code_challenge=\(challenge)",
-                "code_challenge_method=S256",
-                "scope=\(scope)",
-                "state=\(state)"
-            ].joined(separator: "&")
-
-            var components = URLComponents(string: self.authorizeEndpoint)!
-            components.percentEncodedQuery = queryString
-
-            guard let authURL = components.url else {
-                DispatchQueue.main.async {
-                    self.statusMessage = "Failed to build auth URL"
-                    self.isLoading = false
-                }
-                return
-            }
-
-            DispatchQueue.main.async {
-                self.statusMessage = "Opening login..."
-                self.openAuthInBrowser(url: authURL, clientId: clientId, redirectUri: redirectUri)
-            }
+        guard let authURL = components.url else {
+            statusMessage = "Failed to build auth URL"
+            isLoading = false
+            return
         }
-    }
 
-    /// Open the auth URL using ASWebAuthenticationSession with http scheme
-    private func openAuthInBrowser(url: URL, clientId: String, redirectUri: String) {
-        // Use ASWebAuthenticationSession — it will show the in-app browser
-        // We use "http" as callback scheme so it intercepts the localhost redirect
+        // Open in browser
         let session = ASWebAuthenticationSession(
-            url: url,
-            callbackURLScheme: "http"
-        ) { [weak self] callbackURL, error in
-            guard let self = self else { return }
-            self.stopLocalServer()
-
+            url: authURL,
+            callbackURLScheme: "claudeshell-none" // won't match — user will see code on screen
+        ) { [weak self] _, error in
             DispatchQueue.main.async {
-                if let error = error {
-                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                        self.statusMessage = "Login cancelled"
-                    } else {
-                        self.statusMessage = "Login error: \(error.localizedDescription)"
-                    }
-                    self.isLoading = false
-                    return
-                }
-
-                guard let callbackURL = callbackURL,
-                      let code = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
-                        .queryItems?.first(where: { $0.name == "code" })?.value else {
-                    self.statusMessage = "No auth code received"
-                    self.isLoading = false
-                    return
-                }
-
-                self.exchangeCodeForTokens(code: code, clientId: clientId, redirectUri: redirectUri)
+                guard let self = self else { return }
+                // Browser was dismissed — user should now paste the code
+                self.isLoading = false
+                self.awaitingCode = true
+                self.statusMessage = "Paste the authorization code from the browser"
             }
         }
 
@@ -144,77 +107,24 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         session.start()
     }
 
+    /// Called when user pastes the authorization code from the browser
+    func submitAuthCode(_ code: String) {
+        guard let clientId = pendingClientId else {
+            statusMessage = "No pending auth flow"
+            return
+        }
+
+        isLoading = true
+        awaitingCode = false
+        statusMessage = "Exchanging code..."
+        exchangeCodeForTokens(code: code, clientId: clientId, redirectUri: manualRedirectUri)
+    }
+
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         return UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
             .first(where: { $0.isKeyWindow }) ?? ASPresentationAnchor()
-    }
-
-    // MARK: - Local HTTP Server
-
-    private func startLocalServer(completion: @escaping (UInt16?) -> Void) {
-        // Use NWListener to create a TCP server on a random available port
-        let params = NWParameters.tcp
-        guard let listener = try? NWListener(using: params, on: .any) else {
-            completion(nil)
-            return
-        }
-
-        self.localServer = listener
-
-        listener.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                if let port = listener.port?.rawValue {
-                    completion(port)
-                } else {
-                    completion(nil)
-                }
-            case .failed:
-                completion(nil)
-            default:
-                break
-            }
-        }
-
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.handleConnection(connection)
-        }
-
-        listener.start(queue: DispatchQueue.global(qos: .userInitiated))
-    }
-
-    private func handleConnection(_ connection: NWConnection) {
-        connection.start(queue: DispatchQueue.global(qos: .userInitiated))
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
-            guard let data = data, let request = String(data: data, encoding: .utf8) else {
-                connection.cancel()
-                return
-            }
-
-            // Send a simple success response
-            let html = """
-            <html><head><title>ClaudeShell</title></head>
-            <body style="font-family:system-ui;text-align:center;padding:60px">
-            <h1>Authorization successful!</h1>
-            <p>You can close this window and return to ClaudeShell.</p>
-            </body></html>
-            """
-            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
-            connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ _ in
-                connection.cancel()
-            }))
-
-            // We don't need to extract the code here — ASWebAuthenticationSession
-            // intercepts the redirect URL before it reaches our server
-            _ = request // suppress unused warning
-        }
-    }
-
-    private func stopLocalServer() {
-        localServer?.cancel()
-        localServer = nil
     }
 
     // MARK: - Token Exchange
