@@ -39,38 +39,41 @@ class ClaudeEngine {
             """
         }
 
+        // Common capabilities — always included
+        prompt += """
+
+
+        ENVIRONMENT: ClaudeShell on iOS (sandboxed)
+        All files live in the app's Documents directory. / = Documents root.
+        Files are accessible via iOS Files app under "On My iPhone > ClaudeShell".
+
+        SHELL COMMANDS AVAILABLE:
+        Filesystem: ls [-la], cat, cp, mv, rm, mkdir, touch, pwd, cd, find [-name] [-type], chmod, du [-h], ln
+        Text: grep [-i][-n][-c][-v][-r], head [-n], tail [-n], wc [-l][-w][-c], sort [-r], uniq [-c][-d], sed 's/find/replace/[g]', tr [-d][-s] 'set1' 'set2', cut -d<delim> -f<fields> [-c<range>], diff
+        System: echo [-n], env, export, which, clear, exit, help, date, sleep, test [-f][-d][-z][-n], basename, dirname, true, false
+        Network: curl [-X method] [-d data] <url>, wget [-O file] <url>
+        Node.js: node <file.js>, node -e "code", npm install/list/run/init
+        Shell: VAR=val, $VAR, ${VAR}, &&, ||, |, >, >>, "quotes", 'quotes', #comments
+
+        LIMITATIONS:
+        - No fork/exec, git, ssh, tar — everything is built-in
+        - Use write_file tool for reliable file writes (shell > redirect is session-scoped)
+        - Pipes work with: grep, head, tail, wc, sort, uniq, sed, cut, tr, cat
+        - Use && not ; for chaining commands
+        - 75 tool calls max per turn
+        """
+
         if withTools {
             prompt += """
 
-
-            TOOL USE:
-            You have access to tools: bash, read_file, write_file.
-            Use them to accomplish the user's request autonomously.
-            - Use bash to run shell commands (ls, cat, grep, mkdir, echo, etc.)
-            - Use read_file to read file contents
-            - Use write_file to create or modify files
-            - Execute multiple steps as needed to complete the task
-            - When done, provide a summary of what you did
+        TOOLS: You have bash, read_file, write_file.
+        Use them autonomously to complete tasks. Prefer write_file over echo > for creating files.
+        Be concise — this is a mobile screen.
             """
         } else {
             prompt += """
 
-
-            AVAILABLE SHELL COMMANDS:
-            Filesystem: ls, cat, cp, mv, rm, mkdir, touch, pwd, cd, find, chmod, du, ln
-            Text: grep, head, tail, wc, sort, uniq, sed, tr, cut, diff
-            System: echo, env, export, which, clear, exit, help, date, sleep, test, basename, dirname
-            Network: curl, wget
-
-            HOW TO RESPOND:
-            - Be concise — this is a mobile screen
-            - When the user wants to create or edit files, show the exact shell commands to run
-            - Use echo with redirect or cat heredoc patterns to write files
-            - When asked to review or explain code, give focused feedback
-            - When asked to do a task, break it into shell commands the user can run
-            - If you suggest commands, format them clearly so the user can copy them
-            - Infer intent: "review X" = code review, "edit X" = suggest changes, "explain X" = explain
-            - You can read file contents provided in the context to give informed answers
+        Be concise — mobile screen. Show exact commands. Infer intent from context.
             """
         }
 
