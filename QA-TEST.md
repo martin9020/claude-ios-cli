@@ -1,284 +1,163 @@
 # ClaudeShell QA Test Suite
 
-Run this in Claude mode: `claude` then paste the test instructions below.
+## How to Run
+
+Enter `claude` mode, then paste ONE section at a time. After each section completes, paste the next one.
 
 ---
 
-## Instructions for Claude
+## Section 1: Filesystem — PASSED ✅ (tested 2026-03-14)
 
-You are a QA agent. Test every command and feature listed below. For each test:
-1. Run the command
-2. Check the output
-3. Mark PASS or FAIL
-4. Write results to `/qa_results.md`
-
-Start by running: `echo "Starting QA Test" > /qa_results.md`
+All filesystem commands verified working:
+- mkdir, touch, echo >, cat, ls, ls -la ✅
+- cp, mv, rm ✅
+- pwd, cd, cd .., cd / ✅
+- find -name, find -type ✅
+- du, chmod ✅
+- echo >> (append) ✅
 
 ---
 
-## Test 1: Filesystem Commands
+## Section 2: Text Processing — PARTIAL ✅ (tested 2026-03-14)
+
+Verified working:
+- head -2, tail -2 ✅
+- wc -l ✅
+- grep, grep -n, grep -i, grep -c, grep -v ✅
+
+**Still needs testing — paste this:**
 
 ```
-mkdir /qa_test
-touch /qa_test/hello.txt
-echo "Hello World" > /qa_test/hello.txt
-cat /qa_test/hello.txt
-# Expected: Hello World
+Test the remaining text commands. Run each, check output, write results to /qa_results_text.md:
 
-ls /qa_test
-ls -la /qa_test
-# Expected: lists hello.txt
+1. echo "banana" > /qa_test/sort.txt && echo "apple" >> /qa_test/sort.txt && echo "cherry" >> /qa_test/sort.txt && echo "apple" >> /qa_test/sort.txt
+2. sort /qa_test/sort.txt — expect: apple, apple, banana, cherry
+3. sort -r /qa_test/sort.txt — expect: cherry, banana, apple, apple
+4. sort /qa_test/sort.txt | uniq — expect: apple, banana, cherry (test pipe+uniq)
+5. uniq -c /qa_test/sort.txt — expect: count duplicates
+6. echo "one:two:three" > /qa_test/cut.txt
+7. cut -d':' -f2 /qa_test/cut.txt — expect: two
+8. cut -d':' -f1,3 /qa_test/cut.txt — expect: one:three
+9. sed 's/apple/APPLE/' /qa_test/sort.txt — expect: APPLE replacements
+10. echo "Hello World" | tr 'a-z' 'A-Z' — expect: HELLO WORLD
+11. echo "Line A" > /qa_test/d1.txt && echo "Line B" > /qa_test/d2.txt
+12. diff /qa_test/d1.txt /qa_test/d2.txt — expect: shows difference
 
-cp /qa_test/hello.txt /qa_test/hello_copy.txt
-cat /qa_test/hello_copy.txt
-# Expected: Hello World
-
-mv /qa_test/hello_copy.txt /qa_test/renamed.txt
-ls /qa_test
-# Expected: hello.txt and renamed.txt
-
-rm /qa_test/renamed.txt
-ls /qa_test
-# Expected: only hello.txt
-
-pwd
-cd /qa_test
-pwd
-# Expected: /qa_test
-cd /
-pwd
-# Expected: /
-
-find /qa_test -name "*.txt"
-# Expected: finds hello.txt
-
-du /qa_test
-# Expected: shows size
-
-chmod 755 /qa_test/hello.txt
-# Expected: no error
+Write pass/fail for each to /qa_results_text.md then cat /qa_results_text.md
 ```
 
-## Test 2: Text Processing
+---
+
+## Section 3: System Commands — paste this:
 
 ```
-echo "Line 1" > /qa_test/lines.txt
-echo "Line 2" >> /qa_test/lines.txt
-echo "Line 3" >> /qa_test/lines.txt
-echo "Line 4" >> /qa_test/lines.txt
-echo "Line 5" >> /qa_test/lines.txt
+Test system commands. Run each, check output, write results to /qa_results_sys.md:
 
-head -2 /qa_test/lines.txt
-# Expected: Line 1, Line 2
+1. echo "test output" — expect: test output
+2. echo -n "no newline" — expect: no trailing newline
+3. env — expect: lists HOME, PATH, etc.
+4. which echo — expect: shell builtin
+5. which ls — expect: shell builtin
+6. date — expect: current date/time
+7. test -f /qa_test/hello.txt && echo "exists" — expect: exists
+8. test -d /qa_test && echo "is dir" — expect: is dir
+9. test -f /nonexistent || echo "missing" — expect: missing
+10. basename /qa_test/hello.txt — expect: hello.txt
+11. dirname /qa_test/hello.txt — expect: /qa_test
+12. true && echo "true works" — expect: true works
+13. false || echo "false works" — expect: false works
 
-tail -2 /qa_test/lines.txt
-# Expected: Line 4, Line 5
-
-wc -l /qa_test/lines.txt
-# Expected: 5
-
-grep "Line 3" /qa_test/lines.txt
-# Expected: Line 3
-
-grep -n "Line" /qa_test/lines.txt
-# Expected: numbered lines
-
-grep -i "line" /qa_test/lines.txt
-# Expected: all lines (case insensitive)
-
-grep -c "Line" /qa_test/lines.txt
-# Expected: 5
-
-grep -v "Line 3" /qa_test/lines.txt
-# Expected: all except Line 3
-
-echo "banana" > /qa_test/sort.txt
-echo "apple" >> /qa_test/sort.txt
-echo "cherry" >> /qa_test/sort.txt
-echo "apple" >> /qa_test/sort.txt
-
-sort /qa_test/sort.txt
-# Expected: apple, apple, banana, cherry
-
-sort /qa_test/sort.txt | uniq
-# Expected: apple, banana, cherry
-
-echo "one:two:three" > /qa_test/cut.txt
-cut -d':' -f2 /qa_test/cut.txt
-# Expected: two
-
-sed 's/Line/Row/' /qa_test/lines.txt
-# Expected: Row 1, Row 2, etc.
-
-echo "Hello World" | tr 'a-z' 'A-Z'
-# Expected: HELLO WORLD
-
-echo "Line A" > /qa_test/d1.txt
-echo "Line B" > /qa_test/d2.txt
-diff /qa_test/d1.txt /qa_test/d2.txt
-# Expected: shows difference
+Write pass/fail for each to /qa_results_sys.md then cat /qa_results_sys.md
 ```
 
-## Test 3: System Commands
+---
+
+## Section 4: Shell Features — paste this:
 
 ```
-echo "test output"
-# Expected: test output
+Test shell features. Run each, check output, write results to /qa_results_shell.md:
 
-echo -n "no newline"
-# Expected: no newline (no trailing newline)
+1. MYVAR=hello123 && echo $MYVAR — expect: hello123
+2. NAME=Claude && echo "Hello ${NAME}" — expect: Hello Claude
+3. false && echo $? — then: echo $? — expect: 1
+4. true && echo $? — expect: 0
+5. echo "redirect" > /qa_test/redir.txt && cat /qa_test/redir.txt — expect: redirect
+6. echo "appended" >> /qa_test/redir.txt && cat /qa_test/redir.txt — expect: both lines
+7. echo "pipe test" | grep pipe — expect: pipe test
+8. echo "hello world" — expect: hello world
+9. echo 'single quotes' — expect: single quotes
+10. echo "first" && echo "second" — expect: first then second
+11. false || echo "fallback" — expect: fallback
+12. export TESTVAR=exported && echo $TESTVAR — expect: exported
 
-env
-# Expected: lists environment variables
-
-which echo
-# Expected: shell builtin
-
-date
-# Expected: current date
-
-test -f /qa_test/hello.txt && echo "exists" || echo "missing"
-# Expected: exists
-
-test -d /qa_test && echo "is dir" || echo "not dir"
-# Expected: is dir
-
-basename /qa_test/hello.txt
-# Expected: hello.txt
-
-dirname /qa_test/hello.txt
-# Expected: /qa_test
-
-true && echo "true works"
-# Expected: true works
-
-false || echo "false works"
-# Expected: false works
-
-MYVAR=testing123
-echo $MYVAR
-# Expected: testing123
-
-export TESTVAR=exported
-env | grep TESTVAR
-# Note: pipe might not pass env output correctly
+Write pass/fail for each to /qa_results_shell.md then cat /qa_results_shell.md
 ```
 
-## Test 4: Shell Features
+---
+
+## Section 5: Network — paste this:
 
 ```
-# Variable expansion
-NAME=Claude
-echo "Hello ${NAME}"
-# Expected: Hello Claude
+Test network commands. Write results to /qa_results_net.md:
 
-# Exit code
-false
-echo $?
-# Expected: 1
+1. curl https://httpbin.org/get — expect: JSON response
+2. curl -X POST -d '{"test":true}' https://httpbin.org/post — expect: JSON with data
 
-true
-echo $?
-# Expected: 0
-
-# Output redirection
-echo "redirect test" > /qa_test/redir.txt
-cat /qa_test/redir.txt
-# Expected: redirect test
-
-echo "append test" >> /qa_test/redir.txt
-cat /qa_test/redir.txt
-# Expected: both lines
-
-# Pipe
-echo "hello" | grep hello
-# Expected: hello
-
-# Quoted strings
-echo "hello world"
-echo 'single quotes'
-# Expected: hello world, single quotes
-
-# Comments
-# this should be ignored
-echo "after comment"
-# Expected: after comment
-
-# && operator
-echo "first" && echo "second"
-# Expected: first, second
-
-# || operator
-false || echo "fallback"
-# Expected: fallback
+Write pass/fail to /qa_results_net.md then cat /qa_results_net.md
 ```
 
-## Test 5: Network Commands
+---
+
+## Section 6: Node.js — paste this:
 
 ```
-curl https://httpbin.org/get
-# Expected: JSON response with headers
+Test node/npm. Write results to /qa_results_node.md:
 
-curl -X POST -d '{"test":true}' https://httpbin.org/post
-# Expected: JSON response with data
+1. node -e "console.log('Hello from JS')" — expect: Hello from JS
+2. node -e "console.log(2+2)" — expect: 4
+3. node -e "console.log(JSON.stringify({a:1,b:2}))" — expect: {"a":1,"b":2}
+4. npm list — expect: shows packages or empty
+5. npm help — expect: shows usage
+
+Write pass/fail to /qa_results_node.md then cat /qa_results_node.md
 ```
 
-## Test 6: Node.js / npm
+---
+
+## Section 7: Claude Features — paste this:
 
 ```
-node -e "console.log('Hello from JS')"
-# Expected: Hello from JS
+Test your own features. Write results to /qa_results_claude.md:
 
-node -e "console.log(2+2)"
-# Expected: 4
+1. Create file /qa_test/auto.txt with text "Claude wrote this automatically"
+2. Read /qa_test/auto.txt and confirm contents
+3. List all files in /qa_test
+4. Read /qa_test/hello.txt and tell me what it says
+5. Write a simple Python script to /qa_test/hello.py that prints "Hello from Python"
+6. Read it back to verify
 
-npm help
-# Expected: shows npm usage
-
-npm list
-# Expected: shows installed packages (or empty)
+Write pass/fail to /qa_results_claude.md then cat /qa_results_claude.md
 ```
 
-## Test 7: Claude AI Features
+---
+
+## Section 8: Final Summary — paste this:
 
 ```
-/status
-# Expected: shows auth status, model, tools
+Read all QA result files and create a combined summary:
+cat /qa_results_text.md
+cat /qa_results_sys.md
+cat /qa_results_shell.md
+cat /qa_results_net.md
+cat /qa_results_node.md
+cat /qa_results_claude.md
 
-/help
-# Expected: shows available commands
+Then write a final summary to /qa_final.md with:
+- Total tests run
+- Total passed
+- Total failed
+- List of any failures with details
+- Overall verdict
 
-/clear
-# Expected: clears conversation
+Then cat /qa_final.md
 ```
-
-## Test 8: Tool Use (Autonomous)
-
-Ask Claude to:
-- "Create a file called /qa_test/auto_created.txt with the text 'Claude wrote this'"
-- Then verify: `cat /qa_test/auto_created.txt`
-- "Read /qa_test/hello.txt and tell me what it says"
-- "List all files in /qa_test"
-
-## Final Step
-
-Write all results to `/qa_results.md` with this format:
-```
-# QA Results - [date]
-
-## Summary
-- Total tests: X
-- Passed: X
-- Failed: X
-
-## Details
-| Test | Command | Expected | Actual | Status |
-|------|---------|----------|--------|--------|
-| 1.1 | mkdir /qa_test | no error | ... | PASS/FAIL |
-...
-
-## Known Issues
-- ...
-```
-
-Then run: `cat /qa_results.md`
