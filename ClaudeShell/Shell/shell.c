@@ -241,7 +241,7 @@ static int handle_pipe(Shell *sh, const char *line) {
 
     // Write captured output to a temp file for the right command to read.
     // Use cwd-relative name so text commands (which resolve_path via sh->root/cwd) can find it.
-    char tmpfile[SHELL_MAX_PATH];
+    char tmpfile[SHELL_MAX_PATH * 2];
     snprintf(tmpfile, sizeof(tmpfile), "%s%s.pipe_tmp", sh->cwd,
              sh->cwd[strlen(sh->cwd)-1] == '/' ? "" : "/");
     // Also compute the relative name for appending to the command
@@ -274,7 +274,7 @@ static int handle_pipe(Shell *sh, const char *line) {
 
     int ret;
     if (is_pipe_cmd) {
-        snprintf(piped_cmd, sizeof(piped_cmd), "%s %s", right_cmd, pipe_tmpname);
+        snprintf(piped_cmd, sizeof(piped_cmd), "%.4080s %s", right_cmd, pipe_tmpname);
         ret = shell_exec(sh, piped_cmd);
     } else {
         // For other commands, just output the captured text and run the right command
@@ -336,7 +336,7 @@ static int handle_redirect(Shell *sh, char *line) {
     }
 
     // Resolve path
-    char filepath[SHELL_MAX_PATH];
+    char filepath[SHELL_MAX_PATH * 2];
     if (filename[0] == '/') {
         snprintf(filepath, sizeof(filepath), "%s%s", sh->root, filename);
     } else {

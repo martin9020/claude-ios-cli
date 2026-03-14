@@ -8,9 +8,10 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
+#include <windows.h>
 #define access _access
 #define F_OK 0
-#define sleep(s) _sleep((s)*1000)
+#define sleep(s) Sleep((s)*1000)
 #else
 #include <unistd.h>
 #endif
@@ -134,13 +135,13 @@ int cmd_false_cmd(Shell *sh, int argc, char **argv) {
 int cmd_test(Shell *sh, int argc, char **argv) {
     if (argc < 2) return 1;
     if (argc >= 3 && strcmp(argv[1], "-f") == 0) {
-        char path[SHELL_MAX_PATH];
+        char path[SHELL_MAX_PATH * 2];
         if (argv[2][0] == '/') snprintf(path, sizeof(path), "%s%s", sh->root, argv[2]);
         else snprintf(path, sizeof(path), "%s/%s", sh->cwd, argv[2]);
         return access(path, F_OK) == 0 ? 0 : 1;
     }
     if (argc >= 3 && strcmp(argv[1], "-d") == 0) {
-        char path[SHELL_MAX_PATH];
+        char path[SHELL_MAX_PATH * 2];
         if (argv[2][0] == '/') snprintf(path, sizeof(path), "%s%s", sh->root, argv[2]);
         else snprintf(path, sizeof(path), "%s/%s", sh->cwd, argv[2]);
         struct stat st;

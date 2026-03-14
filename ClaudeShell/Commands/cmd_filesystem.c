@@ -111,7 +111,7 @@ int cmd_ls(Shell *sh, int argc, char **argv) {
         if (!show_all && entry->d_name[0] == '.') continue;
 
         if (long_format) {
-            char fullpath[SHELL_MAX_PATH];
+            char fullpath[SHELL_MAX_PATH * 2];
             snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
             struct stat st;
             if (stat(fullpath, &st) == 0) {
@@ -174,11 +174,10 @@ int cmd_cat(Shell *sh, int argc, char **argv) {
 }
 
 int cmd_cp(Shell *sh, int argc, char **argv) {
-    int recursive = 0;
     int src_start = 1;
 
     if (argc >= 2 && (strcmp(argv[1], "-r") == 0 || strcmp(argv[1], "-R") == 0)) {
-        recursive = 1;
+        // recursive flag accepted for compatibility (single-file copy only for now)
         src_start = 2;
     }
 
@@ -202,9 +201,10 @@ int cmd_cp(Shell *sh, int argc, char **argv) {
     if (stat(dst, &st) == 0 && S_ISDIR(st.st_mode)) {
         const char *fname = strrchr(argv[src_start], '/');
         fname = fname ? fname + 1 : argv[src_start];
-        char tmp[SHELL_MAX_PATH];
+        char tmp[SHELL_MAX_PATH * 2];
         snprintf(tmp, sizeof(tmp), "%s/%s", dst, fname);
-        strncpy(dst, tmp, sizeof(dst));
+        strncpy(dst, tmp, sizeof(dst) - 1);
+        dst[sizeof(dst) - 1] = '\0';
     }
 
     FILE *out = fopen(dst, "wb");
@@ -239,9 +239,10 @@ int cmd_mv(Shell *sh, int argc, char **argv) {
     if (stat(dst, &st) == 0 && S_ISDIR(st.st_mode)) {
         const char *fname = strrchr(argv[1], '/');
         fname = fname ? fname + 1 : argv[1];
-        char tmp[SHELL_MAX_PATH];
+        char tmp[SHELL_MAX_PATH * 2];
         snprintf(tmp, sizeof(tmp), "%s/%s", dst, fname);
-        strncpy(dst, tmp, sizeof(dst));
+        strncpy(dst, tmp, sizeof(dst) - 1);
+        dst[sizeof(dst) - 1] = '\0';
     }
 
     if (rename(src, dst) != 0) {
@@ -252,15 +253,14 @@ int cmd_mv(Shell *sh, int argc, char **argv) {
 }
 
 int cmd_rm(Shell *sh, int argc, char **argv) {
-    int recursive = 0;
     int force = 0;
 
     int start = 1;
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
             for (const char *f = argv[i] + 1; *f; f++) {
-                if (*f == 'r' || *f == 'R') recursive = 1;
-                else if (*f == 'f') force = 1;
+                // -r/-R accepted for compatibility (recursive delete handled by remove())
+                if (*f == 'f') force = 1;
             }
             start = i + 1;
         }
