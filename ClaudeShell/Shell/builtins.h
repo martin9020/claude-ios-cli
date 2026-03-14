@@ -69,5 +69,6 @@ int cmd_base64(Shell *sh, int argc, char **argv);
 int cmd_whoami(Shell *sh, int argc, char **argv);
 int cmd_uptime(Shell *sh, int argc, char **argv);
 int cmd_open(Shell *sh, int argc, char **argv);
+int cmd_create_site(Shell *sh, int argc, char **argv);
 
 #endif

@@ -103,7 +103,7 @@ int cmd_which(Shell *sh, int argc, char **argv) {
         "ls","cat","cp","mv","rm","mkdir","touch","pwd","cd",
         "find","chmod","du","ln",
         "grep","head","tail","wc","sort","uniq","sed","tr","cut","diff",
-        "curl","wget","node","npm","serve",
+        "curl","wget","node","npm","serve","create-site",
         "base64","whoami","uptime","open","claude", NULL
     };
     for (const char **b = builtins; *b; b++) {
@@ -138,6 +138,7 @@ int cmd_help(Shell *sh, int argc, char **argv) {
     shell_printf(sh, "             base64 whoami uptime open\n");
     shell_printf(sh, "\033[1mNetwork:\033[0m     curl wget\n");
     shell_printf(sh, "\033[1mServer:\033[0m      serve [port]            — Start HTTP file server\n");
+    shell_printf(sh, "             create-site [name]       — Scaffold HTML project\n");
     shell_printf(sh, "             serve stop              — Stop server\n");
     shell_printf(sh, "             serve status            — Show server status\n");
     shell_printf(sh, "\033[1mNode.js:\033[0m     node <file.js>          — Run JavaScript\n");
@@ -372,6 +373,96 @@ int cmd_open(Shell *sh, int argc, char **argv) {
     return 0;
 }
 
+int cmd_create_site(Shell *sh, int argc, char **argv) {
+    const char *name = (argc >= 2) ? argv[1] : "my-site";
+    char dir[SHELL_MAX_PATH * 2];
+    snprintf(dir, sizeof(dir), "%s/%s", sh->cwd, name);
+
+    // Create directory
+    #ifdef _WIN32
+    _mkdir(dir);
+    #else
+    mkdir(dir, 0755);
+    #endif
+
+    // Write index.html
+    char filepath[SHELL_MAX_PATH * 3];
+    snprintf(filepath, sizeof(filepath), "%s/index.html", dir);
+    FILE *f = fopen(filepath, "w");
+    if (!f) { shell_printf(sh, "create-site: cannot create %s\n", name); return 1; }
+    fprintf(f,
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        "  <meta charset=\"UTF-8\">\n"
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+        "  <title>%s</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n"
+        "</head>\n<body>\n  <div class=\"container\">\n"
+        "    <h1>%s</h1>\n"
+        "    <p>Built with ClaudeShell on iOS</p>\n"
+        "    <div class=\"card\">\n"
+        "      <p id=\"clock\"></p>\n"
+        "      <p class=\"sub\">Running on localhost via serve</p>\n"
+        "    </div>\n"
+        "    <div class=\"actions\">\n"
+        "      <button onclick=\"document.body.classList.toggle('light')\">Toggle Theme</button>\n"
+        "      <button onclick=\"alert('Hello from %s!')\">Say Hello</button>\n"
+        "    </div>\n"
+        "  </div>\n  <script src=\"app.js\"></script>\n"
+        "</body>\n</html>\n", name, name, name);
+    fclose(f);
+
+    // Write style.css
+    snprintf(filepath, sizeof(filepath), "%s/style.css", dir);
+    f = fopen(filepath, "w");
+    if (f) {
+        fprintf(f,
+            "* { margin:0; padding:0; box-sizing:border-box; }\n"
+            "body { font-family:-apple-system,sans-serif; min-height:100vh;\n"
+            "  display:flex; align-items:center; justify-content:center;\n"
+            "  background:linear-gradient(135deg,#0f0c29,#302b63,#24243e); color:#fff;\n"
+            "  transition:all .3s; }\n"
+            "body.light { background:linear-gradient(135deg,#f5f7fa,#c3cfe2); color:#333; }\n"
+            ".container { text-align:center; padding:40px 20px; max-width:500px; }\n"
+            "h1 { font-size:2.5rem; margin-bottom:8px;\n"
+            "  background:linear-gradient(90deg,#a78bfa,#60a5fa);\n"
+            "  -webkit-background-clip:text; -webkit-text-fill-color:transparent; }\n"
+            ".card { background:rgba(255,255,255,.1); backdrop-filter:blur(10px);\n"
+            "  border-radius:16px; padding:24px; margin:24px 0;\n"
+            "  border:1px solid rgba(255,255,255,.15); }\n"
+            "body.light .card { background:rgba(0,0,0,.05); border-color:rgba(0,0,0,.1); }\n"
+            "#clock { font-size:2rem; font-weight:700; font-variant-numeric:tabular-nums; }\n"
+            ".sub { opacity:.6; margin-top:8px; font-size:.9rem; }\n"
+            ".actions { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }\n"
+            "button { padding:12px 24px; border:none; border-radius:12px;\n"
+            "  font-size:1rem; font-weight:600; cursor:pointer;\n"
+            "  background:linear-gradient(135deg,#a78bfa,#60a5fa); color:#fff;\n"
+            "  transition:transform .15s; }\n"
+            "button:active { transform:scale(.95); }\n");
+        fclose(f);
+    }
+
+    // Write app.js
+    snprintf(filepath, sizeof(filepath), "%s/app.js", dir);
+    f = fopen(filepath, "w");
+    if (f) {
+        fprintf(f,
+            "function updateClock() {\n"
+            "  var now = new Date();\n"
+            "  var h = String(now.getHours()).padStart(2,'0');\n"
+            "  var m = String(now.getMinutes()).padStart(2,'0');\n"
+            "  var s = String(now.getSeconds()).padStart(2,'0');\n"
+            "  document.getElementById('clock').textContent = h+':'+m+':'+s;\n"
+            "}\nupdateClock();\nsetInterval(updateClock, 1000);\n");
+        fclose(f);
+    }
+
+    shell_printf(sh, "Created %s/\n", name);
+    shell_printf(sh, "  index.html\n  style.css\n  app.js\n\n");
+    shell_printf(sh, "To preview in Safari:\n");
+    shell_printf(sh, "  cd %s && serve\n", name);
+    shell_printf(sh, "  Open http://localhost:8080 in Safari\n");
+    return 0;
+}
+
 int cmd_claude(Shell *sh, int argc, char **argv) {
     if (_claude_handler) {
         _claude_handler(sh, argc, argv);
@@ -448,6 +539,7 @@ int cmd_dispatch(Shell *sh, int argc, char **argv) {
     if (strcmp(cmd, "whoami") == 0) return cmd_whoami(sh, argc, argv);
     if (strcmp(cmd, "uptime") == 0) return cmd_uptime(sh, argc, argv);
     if (strcmp(cmd, "open") == 0) return cmd_open(sh, argc, argv);
+    if (strcmp(cmd, "create-site") == 0) return cmd_create_site(sh, argc, argv);
 
     // Claude
     if (strcmp(cmd, "claude") == 0) return cmd_claude(sh, argc, argv);
