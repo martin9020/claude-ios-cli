@@ -140,11 +140,18 @@ class NpmManager {
         var metaError: String?
         let semaphore = DispatchSemaphore(value: 0)
 
-        let metaTask = URLSession.shared.dataTask(with: metaURL) { data, response, error in
+        // Use abbreviated metadata header to avoid downloading full registry data (can be 50MB+)
+        var metaRequest = URLRequest(url: metaURL)
+        metaRequest.setValue("application/vnd.npm.install-v1+json", forHTTPHeaderField: "Accept")
+        metaRequest.timeoutInterval = 30
+
+        let metaTask = URLSession.shared.dataTask(with: metaRequest) { data, response, error in
             if let error = error {
                 metaError = error.localizedDescription
             } else if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
                 metaError = "package '\(packageName)' not found"
+            } else if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                metaError = "registry returned HTTP \(httpResponse.statusCode)"
             } else {
                 metaResult = data
             }
@@ -160,7 +167,7 @@ class NpmManager {
 
         guard let data = metaResult,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            output("npm ERR! failed to parse registry response\n")
+            output("npm ERR! failed to parse registry response (\(metaResult?.count ?? 0) bytes)\n")
             return 1
         }
 

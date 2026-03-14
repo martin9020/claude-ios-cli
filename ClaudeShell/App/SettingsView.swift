@@ -59,8 +59,8 @@ struct SettingsView: View {
                             if !installOutput.isEmpty {
                                 Text(installOutput)
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(3)
+                                    .foregroundColor(installOutput.contains("ERR") ? .red : .secondary)
+                                    .lineLimit(5)
                             }
                         } else {
                             HStack {
@@ -237,7 +237,11 @@ struct SettingsView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = NpmManager.shared.installClaudeCode { line in
                 DispatchQueue.main.async {
-                    self.installOutput = line.trimmingCharacters(in: .newlines)
+                    // Show the latest status line (keep it short for the UI)
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        self.installOutput = trimmed
+                    }
                 }
             }
 
@@ -246,7 +250,10 @@ struct SettingsView: View {
                 if result == 0 {
                     self.installOutput = "Claude Code package installed successfully!"
                 } else {
-                    self.installOutput = "Installation failed. Check your network and try again."
+                    // Keep the last error message visible instead of generic message
+                    if !self.installOutput.contains("ERR") {
+                        self.installOutput = "Installation failed. Check your network and try again."
+                    }
                 }
             }
         }
