@@ -62,10 +62,11 @@ See `QA-TEST.md` for comprehensive test instructions. Enter `claude` mode on the
 - [x] Pipe support (cmd1 | cmd2)
 - [x] Output redirection (cmd > file, cmd >> file)
 
-### Built-in Commands (40+) — WORKING ✅
+### Built-in Commands (45+) — WORKING ✅
 - [x] **Filesystem:** ls, cat, cp, mv, rm, mkdir, touch, pwd, cd, find, chmod, du, ln
 - [x] **Text:** grep, head, tail, wc, sort, uniq, sed, tr, cut, diff
 - [x] **System:** echo, env, which, clear, exit, help, date, sleep, test, basename, dirname
+- [x] **Utility:** serve (HTTP server), base64, whoami, uptime, open
 - [x] **Network:** curl, wget (via URLSession bridge)
 - [x] **Node.js:** node (JavaScriptCore), npm install/list/run
 - [x] **Claude:** interactive mode, one-shot, config, status
@@ -173,6 +174,7 @@ Claude Mode:
 | `TerminalEmulator.swift` | Output buffer, scrollback, ANSI |
 | `NpmManager.swift` | npm package manager |
 | `JsEngine.swift` | JavaScriptCore runtime |
+| `HttpServer.swift` | Local HTTP file server (serve command) |
 | `ToolDefinitions.swift` | Claude tool schemas |
 | `test_main.c` | 22 local tests |
 | `build-ios.yml` | CI pipeline (~40s) |
@@ -183,5 +185,3 @@ Claude Mode:
 
 - Session resume (persist conversation across app restarts)
 - Streaming responses (show tokens as they arrive)
-- Input redirection (cmd < file)
-- Glob expansion (*.txt)

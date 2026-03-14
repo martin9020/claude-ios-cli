@@ -26,9 +26,21 @@ A terminal app for iPhone that brings Claude Code to your pocket. Run shell comm
 | Filesystem | `ls` `cat` `cp` `mv` `rm` `mkdir` `touch` `pwd` `cd` `find` `chmod` `du` |
 | Text | `grep` `head` `tail` `wc` `sort` `uniq` `sed` `tr` `cut` `diff` |
 | System | `echo` `env` `export` `which` `date` `sleep` `test` `basename` `dirname` |
+| Utility | `serve` `base64` `whoami` `uptime` `open` |
 | Network | `curl` `wget` |
 | Node.js | `node <file.js>` `node -e "code"` `npm install` `npm list` |
 | Shell | pipes `\|`  redirects `>` `>>`  variables `$VAR`  operators `&&` `\|\|` |
+
+## Local HTTP Server
+
+```
+serve              # start server on port 8080
+serve 3000         # start on custom port
+serve stop         # stop server
+serve status       # check if running
+```
+
+Then open `http://localhost:8080` in Safari to view your HTML files.
 
 ## Claude AI Mode
 
