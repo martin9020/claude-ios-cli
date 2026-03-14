@@ -1,4 +1,5 @@
 import Foundation
+import Compression
 
 /// Handles npm package operations — install, list, remove
 /// Downloads packages from registry.npmjs.org into the app's sandbox
@@ -360,44 +361,63 @@ class NpmManager {
         return extractTar(data: decompressed, to: destDir)
     }
 
-    /// Decompress gzip data using zlib (available on iOS)
+    /// Decompress gzip data using Apple's Compression framework
     private func decompressGzip(_ data: Data) -> Data? {
         // Check gzip magic number
-        guard data.count > 2, data[0] == 0x1f, data[1] == 0x8b else {
+        guard data.count > 18, data[0] == 0x1f, data[1] == 0x8b else {
             return nil
         }
 
-        var stream = z_stream()
-        stream.next_in = UnsafeMutablePointer<Bytef>(mutating: (data as NSData).bytes.bindMemory(to: Bytef.self, capacity: data.count))
-        stream.avail_in = uint(data.count)
+        // Skip gzip header to get to the raw deflate stream
+        var headerSize = 10 // minimum gzip header
+        let flags = data[3]
 
-        // Initialize for gzip decompression (windowBits = 15 + 32 for auto-detect)
-        guard inflateInit2_(&stream, 15 + 32, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
-            return nil
+        if flags & 0x04 != 0 { // FEXTRA
+            guard headerSize + 2 <= data.count else { return nil }
+            let extraLen = Int(data[headerSize]) | (Int(data[headerSize + 1]) << 8)
+            headerSize += 2 + extraLen
+        }
+        if flags & 0x08 != 0 { // FNAME — null-terminated string
+            while headerSize < data.count && data[headerSize] != 0 { headerSize += 1 }
+            headerSize += 1
+        }
+        if flags & 0x10 != 0 { // FCOMMENT — null-terminated string
+            while headerSize < data.count && data[headerSize] != 0 { headerSize += 1 }
+            headerSize += 1
+        }
+        if flags & 0x02 != 0 { // FHCRC
+            headerSize += 2
         }
 
-        var result = Data()
-        let bufferSize = 65536
-        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        guard headerSize < data.count - 8 else { return nil }
 
-        repeat {
-            stream.next_out = &buffer
-            stream.avail_out = uint(bufferSize)
+        // Extract the raw deflate data (strip gzip header and 8-byte trailer)
+        let deflateData = data.subdata(in: headerSize..<(data.count - 8))
 
-            let status = inflate(&stream, Z_NO_FLUSH)
-            if status != Z_OK && status != Z_STREAM_END {
-                inflateEnd(&stream)
-                return nil
-            }
+        // Read uncompressed size from last 4 bytes (little-endian, mod 2^32)
+        let sizeBytes = data.subdata(in: (data.count - 4)..<data.count)
+        let uncompressedSize = Int(sizeBytes[0]) | (Int(sizeBytes[1]) << 8) |
+                               (Int(sizeBytes[2]) << 16) | (Int(sizeBytes[3]) << 24)
 
-            let bytesWritten = bufferSize - Int(stream.avail_out)
-            result.append(buffer, count: bytesWritten)
+        // Use a generous buffer (uncompressedSize might be truncated for large files)
+        let bufferSize = max(uncompressedSize, deflateData.count * 4)
+        var destinationBuffer = [UInt8](repeating: 0, count: bufferSize)
 
-            if status == Z_STREAM_END { break }
-        } while stream.avail_out == 0
+        let decodedSize = deflateData.withUnsafeBytes { srcPtr -> Int in
+            guard let srcBase = srcPtr.baseAddress else { return 0 }
+            return compression_decode_buffer(
+                &destinationBuffer,
+                bufferSize,
+                srcBase.assumingMemoryBound(to: UInt8.self),
+                deflateData.count,
+                nil,
+                COMPRESSION_ZLIB
+            )
+        }
 
-        inflateEnd(&stream)
-        return result
+        guard decodedSize > 0 else { return nil }
+
+        return Data(bytes: destinationBuffer, count: decodedSize)
     }
 
     /// Extract tar archive data
