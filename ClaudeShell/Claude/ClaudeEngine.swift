@@ -146,7 +146,7 @@ class ClaudeEngine {
         request.httpBody = jsonData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAuth(auth, to: &request)
-        request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.timeoutInterval = 120
 
@@ -241,7 +241,7 @@ class ClaudeEngine {
         request.httpBody = jsonData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAuth(auth, to: &request)
-        request.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.timeoutInterval = 120
 
