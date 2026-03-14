@@ -179,13 +179,9 @@ Claude Mode:
 
 ---
 
-## TODO (Future)
+## Ideas (not planned)
 
-- [ ] Input redirection (cmd < file)
-- [ ] Here documents (<<EOF)
-- [ ] Glob expansion (*.txt)
-- [ ] Streaming responses (show tokens as they arrive)
-- [ ] Tab completion
-- [ ] Keyboard shortcuts (Ctrl+C, Ctrl+D)
-- [ ] Session resume (persist conversation across app restarts)
-- [ ] Increase iteration cap or make configurable
+- Session resume (persist conversation across app restarts)
+- Streaming responses (show tokens as they arrive)
+- Input redirection (cmd < file)
+- Glob expansion (*.txt)
