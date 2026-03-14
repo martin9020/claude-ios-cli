@@ -1,139 +1,91 @@
-# ClaudeShell — Claude Code CLI for iOS
+# ClaudeShell — Claude Code for iOS
 
-A self-contained terminal environment that brings Claude Code to iPhone.
-Embedded POSIX shell + Claude AI in one app. No server needed. Runs entirely in the iOS sandbox.
+A terminal app for iPhone that brings Claude Code to your pocket. Run shell commands, talk to Claude, and let it autonomously create files, run scripts, and build projects — all from your phone.
 
-## Goal
+## Features
 
-Run Claude Code on iPhone the same way you'd use `cmd.exe` or a Linux terminal on a PC — with bash-like commands, file operations, curl, and a direct Claude AI integration.
+- **40+ shell commands** — ls, cat, grep, sed, curl, node, npm, and more
+- **Claude AI** — autonomous tool use with bash, read_file, write_file
+- **Pro/Max login** — OAuth via your Claude subscription, no API key needed
+- **Dual tabs** — Shell and Claude run side by side with independent output
+- **Files app** — browse sandbox files from iOS Files
+- **Copy button** — copy terminal log to clipboard
+- **~40s CI builds** — push to master, get an IPA
 
-## Current Status
+## Quick Start
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| C Shell Engine | DONE | 40+ built-in commands, env vars, pipes, &&/\|\| |
-| Shell Tests (local) | PASS (19/19) | Cross-platform: runs on Windows, Linux, macOS |
-| Swift App (iOS) | DONE | Terminal UI, settings, ANSI color support |
-| Claude AI Integration | DONE | `claude ask/run/edit/review` via Anthropic API |
-| Network (curl/wget) | DONE | URLSession bridge for HTTP requests |
-| CI Build (GitHub Actions) | GREEN | Builds, tests, packages IPA automatically |
-| IPA Sideloading | IN PROGRESS | AltStore/Sideloadly installation |
+1. Download the IPA from [GitHub Actions](../../actions)
+2. Install via [Sideloadly](https://sideloadly.io) (USB) or AltStore
+3. Open the app → tap Settings (gear) → Sign in with Claude Pro/Max
+4. Type `claude` or tap the Claude tab to start AI chat
+
+## Shell Commands
+
+| Category | Commands |
+|----------|----------|
+| Filesystem | `ls` `cat` `cp` `mv` `rm` `mkdir` `touch` `pwd` `cd` `find` `chmod` `du` |
+| Text | `grep` `head` `tail` `wc` `sort` `uniq` `sed` `tr` `cut` `diff` |
+| System | `echo` `env` `export` `which` `date` `sleep` `test` `basename` `dirname` |
+| Network | `curl` `wget` |
+| Node.js | `node <file.js>` `node -e "code"` `npm install` `npm list` |
+| Shell | pipes `\|`  redirects `>` `>>`  variables `$VAR`  operators `&&` `\|\|` |
+
+## Claude AI Mode
+
+Type `claude` or tap the Claude tab. Claude can run commands, create files, and chain operations autonomously (up to 75 per turn).
+
+```
+claude> create a python script that fetches weather data
+⚙ bash: mkdir -p projects
+⚙ write_file: projects/weather.py
+⚙ bash: cat projects/weather.py
+Done! Created projects/weather.py
+```
 
 ## Architecture
 
 ```
-iPhone App Sandbox
-+--------------------------------------------------+
-|  SwiftUI Terminal View                           |
-|  +--------------------------------------------+ |
-|  | ~ $ claude ask "explain this code"          | |
-|  | Thinking...                                 | |
-|  | The code implements a binary search...      | |
-|  +--------------------------------------------+ |
-|                      |                            |
-|  ShellBridge (Swift-C Bridge)                    |
-|                      |                            |
-|  +--------------------------------------------+ |
-|  | C Shell Engine (shell.c)                    | |
-|  |  - Tokenizer, variable expansion           | |
-|  |  - &&, ||, pipes, quotes                   | |
-|  |  - Command dispatch table                  | |
-|  +--------------------------------------------+ |
-|       |          |           |          |        |
-|  Filesystem   Text      Network    Claude AI    |
-|  ls,cat,cp   grep,sed   curl,wget  ask,run     |
-|  mkdir,rm    head,tail             edit,review   |
-|  find,touch  wc,sort                            |
-+--------------------------------------------------+
-       |                        |
-   App Documents/          Anthropic API
-   (sandboxed fs)        (api.anthropic.com)
+TerminalView (SwiftUI)
+├── Shell Tab ──→ ShellBridge ──→ shell.c / cmd_*.c (C engine)
+└── Claude Tab ─→ ClaudeEngine ─→ Anthropic API (Bearer + oauth beta)
+                  └── Tools: bash, read_file, write_file
 ```
 
-## Built-in Commands
+- **C shell engine** — 40+ commands, compiles to ARM64, zero dependencies
+- **Swift bridge** — connects C callbacks to iOS via function pointers
+- **OAuth** — PKCE flow via claude.ai, Bearer token with `anthropic-beta: oauth-2025-04-20`
+- **Sandbox** — all files in app's Documents directory, accessible via iOS Files
 
-### Filesystem
-`ls` `cat` `cp` `mv` `rm` `mkdir` `touch` `pwd` `cd` `find` `chmod` `du`
+## Build
 
-### Text Processing
-`grep` `head` `tail` `wc` `sort` `uniq` `sed` `tr` `cut` `diff`
+Push triggers CI (~40s):
 
-### System
-`echo` `env` `export` `which` `clear` `exit` `help` `date` `sleep` `test` `true` `false` `basename` `dirname`
-
-### Network
-`curl` `wget`
-
-### Claude AI
-`claude ask <prompt>` `claude run <task>` `claude edit <file>` `claude review <file>` `claude config` `claude status`
-
-### Shell Features
-- Environment variables: `VAR=value`, `$VAR`, `${VAR}`
-- Operators: `&&`, `||`, `$?`
-- Quoting: `"double"`, `'single'`
-- Comments: `# ignored`
-
-## Project Structure
-
-```
-claude-ios-cli/
-├── .github/workflows/
-│   ├── build-ios.yml          # Full iOS build, test, IPA packaging
-│   └── test-shell.yml         # Cross-platform C engine tests
-├── ClaudeShell/
-│   ├── App/
-│   │   ├── ClaudeShellApp.swift    # App entry point
-│   │   ├── TerminalView.swift      # Main terminal UI
-│   │   └── SettingsView.swift      # API key, model, font settings
-│   ├── Shell/
-│   │   ├── shell.c / shell.h       # Core shell interpreter
-│   │   ├── environment.c / .h      # Environment variable store
-│   │   ├── builtins.c / .h         # Command declarations
-│   │   ├── shell_helpers.c / .h    # Swift-safe struct accessors
-│   │   └── test_main.c             # Local test harness
-│   ├── Commands/
-│   │   ├── cmd_filesystem.c        # ls, cat, cp, mv, rm, mkdir, etc.
-│   │   ├── cmd_text.c              # grep, head, tail, wc, sort, etc.
-│   │   ├── cmd_network.c           # curl, wget (bridges to Swift)
-│   │   └── cmd_system.c            # echo, env, help + dispatch table
-│   ├── Claude/
-│   │   └── ClaudeEngine.swift      # Anthropic Messages API client
-│   ├── Terminal/
-│   │   └── TerminalEmulator.swift  # Output buffer, ANSI parser
-│   ├── Bridge/
-│   │   ├── ShellBridge.swift       # C-to-Swift bridge + callbacks
-│   │   └── ClaudeShell-Bridging-Header.h
-│   ├── Tests/
-│   │   └── ShellTests.swift        # iOS unit tests
-│   └── Info.plist
-├── CLAUDE.md                       # Dev guide for AI assistants
-├── INSTALL.md                      # Installation walkthrough
-├── ExportOptions.plist             # App Store export config
-├── generate-xcodeproj.sh           # Xcode project generator
-└── Package.swift                   # SPM manifest
+```bash
+git push origin master
+gh run download --name ClaudeShell-sideload --dir Desktop
 ```
 
-## Quick Start
+Local tests (Windows/Mac/Linux):
 
-### Test locally (Windows/Linux/Mac)
 ```bash
 cd ClaudeShell/Shell
-gcc -o shell_test test_main.c shell.c shell_helpers.c environment.c \
-    ../Commands/cmd_system.c ../Commands/cmd_filesystem.c \
-    ../Commands/cmd_text.c ../Commands/cmd_network.c -DTEST_MODE -I.
-./shell_test
+gcc -o test test_main.c shell.c shell_helpers.c environment.c \
+    ../Commands/cmd_*.c -DTEST_MODE -I.
+./test  # 22 passed, 0 failed
 ```
 
-### Build iOS app (via GitHub Actions)
-```bash
-git push origin master          # Auto-triggers build + test
-gh run watch                    # Watch CI progress
-gh run download <run-id> --name ClaudeShell-sideload  # Download IPA
-```
+## QA Status
 
-### Install on iPhone
-See [INSTALL.md](INSTALL.md) for AltStore, Sideloadly, TestFlight, or App Store paths.
+**64/70 tests passing (91.4%)** — 0 hard failures. See [QA-TEST.md](QA-TEST.md).
 
-## Development Workflow
+## Distribution
 
-See [CLAUDE.md](CLAUDE.md) for the full development checklist and CI/CD pipeline.
+| Method | Cost | Notes |
+|--------|------|-------|
+| Sideloadly | Free | USB install, re-sign every 7 days |
+| AltStore | Free | On-device, re-sign every 7 days |
+| TestFlight | $99/yr | Share via link, no re-signing |
+
+## License
+
+MIT
