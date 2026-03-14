@@ -470,9 +470,11 @@ int cmd_tr(Shell *sh, int argc, char **argv) {
         }
     }
 
-    // Find input file — last arg if it doesn't start with -
+    // Find input file — last arg that isn't a flag or set argument
+    // For -d and -s modes, only 1 set is needed; for translate, 2 sets
     int file_arg = -1;
-    int expected_args = opt_end + (delete_mode ? 1 : 2);
+    int sets_needed = (delete_mode || squeeze_mode) ? 1 : 2;
+    int expected_args = opt_end + sets_needed;
     if (argc > expected_args) file_arg = argc - 1;
 
     FILE *f = NULL;
@@ -525,11 +527,18 @@ int cmd_cut(Shell *sh, int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "-d", 2) == 0) {
-            // Handle both: -d ':' (two args) and -d':' (one arg)
+            // Handle: -d: (attached), -d ':' (next arg, quotes stripped)
+            // Also -d':' where tokenizer keeps quotes: argv = [-d':']
             if (argv[i][2] != '\0') {
-                delim = argv[i][2]; // -d':'  → delim is the char after -d
+                char dc = argv[i][2];
+                // Strip surrounding quotes if present: -d':' → skip ' to get :
+                if ((dc == '\'' || dc == '"') && argv[i][3] != '\0') {
+                    delim = argv[i][3];
+                } else {
+                    delim = dc;
+                }
             } else if (i + 1 < argc) {
-                delim = argv[++i][0]; // -d ':' → next arg
+                delim = argv[++i][0];
             }
         } else if (strncmp(argv[i], "-f", 2) == 0) {
             // Handle -f2 or -f 2 or -f1,3
