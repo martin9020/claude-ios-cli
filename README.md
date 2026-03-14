@@ -2,6 +2,12 @@
 
 A terminal app for iPhone that brings Claude Code to your pocket. Run shell commands, talk to Claude, and let it autonomously create files, run scripts, and build projects — all from your phone.
 
+> **Like this project?** Support development:
+>
+> **ETH:** `0x753D2C9553A405f3CFfCCD6E3217aac8b83296d5`
+>
+> **BTC:** `bc1qupe3py742jgxfk6tp9p5rc7uvh5meqrvegxhcd`
+
 ## Features
 
 - **40+ shell commands** — ls, cat, grep, sed, curl, node, npm, and more
