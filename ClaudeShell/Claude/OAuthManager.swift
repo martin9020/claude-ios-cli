@@ -66,6 +66,9 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         // Compute code_challenge = base64url(SHA256(verifier))
         let challenge = generateCodeChallenge(from: verifier)
 
+        // Generate random state for CSRF protection
+        let state = generateCodeVerifier() // reuse the random string generator
+
         // Build authorize URL — construct percent-encoded query manually
         // to ensure colons stay unencoded and spaces become %20
         let redirectUri = "\(callbackScheme)://oauth/callback"
@@ -78,7 +81,8 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
             "redirect_uri=\(redirectUri)",
             "code_challenge=\(challenge)",
             "code_challenge_method=S256",
-            "scope=\(scope)"
+            "scope=\(scope)",
+            "state=\(state)"
         ].joined(separator: "&")
 
         var components = URLComponents(string: authorizeEndpoint)!
