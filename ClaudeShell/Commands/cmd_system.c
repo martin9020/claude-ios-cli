@@ -23,6 +23,19 @@ void shell_set_claude_handler(claude_handler_fn handler) {
     _claude_handler = handler;
 }
 
+// Node/npm command — bridges to Swift JsEngine/NpmManager
+typedef void (*node_handler_fn)(Shell *sh, int argc, char **argv);
+static node_handler_fn _node_handler = NULL;
+static node_handler_fn _npm_handler = NULL;
+
+void shell_set_node_handler(node_handler_fn handler) {
+    _node_handler = handler;
+}
+
+void shell_set_npm_handler(node_handler_fn handler) {
+    _npm_handler = handler;
+}
+
 // --- System Commands ---
 
 int cmd_echo(Shell *sh, int argc, char **argv) {
@@ -53,7 +66,7 @@ int cmd_which(Shell *sh, int argc, char **argv) {
         "ls","cat","cp","mv","rm","mkdir","touch","pwd","cd",
         "find","chmod","du","ln",
         "grep","head","tail","wc","sort","uniq","sed","tr","cut","diff",
-        "curl","wget","claude", NULL
+        "curl","wget","node","npm","claude", NULL
     };
     for (const char **b = builtins; *b; b++) {
         if (strcmp(argv[1], *b) == 0) {
@@ -85,6 +98,9 @@ int cmd_help(Shell *sh, int argc, char **argv) {
     shell_printf(sh, "\033[1mText:\033[0m        grep head tail wc sort uniq sed tr cut diff\n");
     shell_printf(sh, "\033[1mSystem:\033[0m      echo env export which clear exit help date sleep\n");
     shell_printf(sh, "\033[1mNetwork:\033[0m     curl wget\n");
+    shell_printf(sh, "\033[1mNode.js:\033[0m     node <file.js>          — Run JavaScript\n");
+    shell_printf(sh, "             npm install <pkg>        — Install npm package\n");
+    shell_printf(sh, "             npm list                 — List installed packages\n");
     shell_printf(sh, "\033[1mClaude AI:\033[0m   claude                  — Enter interactive AI chat\n");
     shell_printf(sh, "             claude <message>         — One-shot AI question\n");
     shell_printf(sh, "\033[1mShell:\033[0m       VAR=val  $VAR  ${VAR}  &&  ||  \"quotes\"  'quotes'\n");
@@ -174,6 +190,24 @@ int cmd_xargs(Shell *sh, int argc, char **argv) {
     return 1;
 }
 
+int cmd_node(Shell *sh, int argc, char **argv) {
+    if (_node_handler) {
+        _node_handler(sh, argc, argv);
+        return sh->last_exit_code;
+    }
+    shell_printf(sh, "node: JavaScript engine (handled by iOS app)\n");
+    return 0;
+}
+
+int cmd_npm(Shell *sh, int argc, char **argv) {
+    if (_npm_handler) {
+        _npm_handler(sh, argc, argv);
+        return sh->last_exit_code;
+    }
+    shell_printf(sh, "npm: package manager (handled by iOS app)\n");
+    return 0;
+}
+
 int cmd_claude(Shell *sh, int argc, char **argv) {
     if (_claude_handler) {
         _claude_handler(sh, argc, argv);
@@ -237,6 +271,10 @@ int cmd_dispatch(Shell *sh, int argc, char **argv) {
     // Network
     if (strcmp(cmd, "curl") == 0) return cmd_curl(sh, argc, argv);
     if (strcmp(cmd, "wget") == 0) return cmd_wget(sh, argc, argv);
+
+    // Node.js / npm
+    if (strcmp(cmd, "node") == 0) return cmd_node(sh, argc, argv);
+    if (strcmp(cmd, "npm") == 0) return cmd_npm(sh, argc, argv);
 
     // Claude
     if (strcmp(cmd, "claude") == 0) return cmd_claude(sh, argc, argv);

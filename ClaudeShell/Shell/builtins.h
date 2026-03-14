@@ -57,4 +57,8 @@ int cmd_wget(Shell *sh, int argc, char **argv);
 // Claude commands
 int cmd_claude(Shell *sh, int argc, char **argv);
 
+// Node.js / npm commands
+int cmd_node(Shell *sh, int argc, char **argv);
+int cmd_npm(Shell *sh, int argc, char **argv);
+
 #endif

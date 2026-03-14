@@ -41,6 +41,8 @@ let package = Package(
                 "Bridge/ShellBridge.swift",
                 "Claude/ClaudeEngine.swift",
                 "Terminal/TerminalEmulator.swift",
+                "Node/JsEngine.swift",
+                "Node/NpmManager.swift",
                 "App/ClaudeShellApp.swift",
                 "App/TerminalView.swift",
                 "App/SettingsView.swift"

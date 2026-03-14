@@ -56,6 +56,14 @@ class ShellBridge: ObservableObject {
 
         // Register claude handler
         shell_set_claude_handler(claudeCommandCallback)
+
+        // Register node/npm handlers
+        shell_set_node_handler(nodeCommandCallback)
+        shell_set_npm_handler(npmCommandCallback)
+
+        // Initialize JS engine and npm manager
+        JsEngine.shared.setup(sandboxRoot: sandboxRoot)
+        NpmManager.shared.setup(sandboxRoot: sandboxRoot)
     }
 
     deinit {
@@ -409,4 +417,82 @@ private func claudeCommandCallback(
         // Any other "claude <message>" is handled by TerminalView as one-shot
         shell_output(sh, "Handled by interactive mode.\n")
     }
+}
+
+/// Node command callback — runs JavaScript via JavaScriptCore
+private func nodeCommandCallback(
+    _ sh: UnsafeMutablePointer<Shell>?,
+    _ argc: Int32,
+    _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) {
+    guard let sh = sh else { return }
+
+    var args: [String] = []
+    if let argv = argv {
+        for i in 0..<Int(argc) {
+            if let arg = argv[i] {
+                args.append(String(cString: arg))
+            }
+        }
+    }
+
+    let cwd = String(cString: shell_get_cwd(sh))
+    let root = String(cString: shell_get_root(sh))
+
+    // node -e "code" — eval mode
+    if args.count >= 3 && args[1] == "-e" {
+        let code = args.dropFirst(2).joined(separator: " ")
+        let exitCode = JsEngine.shared.runEval(source: code, cwd: root + cwd) { output in
+            shell_output(sh, output)
+        }
+        shell_set_exit_code(sh, exitCode)
+        return
+    }
+
+    // node <file> — run file
+    if args.count >= 2 {
+        let filename = args[1]
+        let filePath: String
+        if filename.hasPrefix("/") {
+            filePath = root + filename
+        } else {
+            filePath = root + cwd + "/" + filename
+        }
+        let fileArgs = Array(args.dropFirst(2))
+        let exitCode = JsEngine.shared.runFile(path: filePath, cwd: root + cwd, args: fileArgs) { output in
+            shell_output(sh, output)
+        }
+        shell_set_exit_code(sh, exitCode)
+        return
+    }
+
+    // node (no args) — show version info
+    shell_output(sh, "ClaudeShell JavaScript Engine (JavaScriptCore)\n")
+    shell_output(sh, "Usage: node <file.js>      Run a JavaScript file\n")
+    shell_output(sh, "       node -e \"code\"      Evaluate JavaScript\n")
+}
+
+/// npm command callback — handles package management
+private func npmCommandCallback(
+    _ sh: UnsafeMutablePointer<Shell>?,
+    _ argc: Int32,
+    _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) {
+    guard let sh = sh else { return }
+
+    var args: [String] = []
+    if let argv = argv {
+        for i in 1..<Int(argc) { // Skip "npm" itself
+            if let arg = argv[i] {
+                args.append(String(cString: arg))
+            }
+        }
+    }
+
+    let cwd = String(cString: shell_get_cwd(sh))
+
+    let exitCode = NpmManager.shared.handleCommand(args: args, cwd: cwd) { output in
+        shell_output(sh, output)
+    }
+    shell_set_exit_code(sh, exitCode)
 }

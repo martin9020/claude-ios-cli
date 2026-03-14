@@ -17,4 +17,9 @@ void shell_set_network_handler(network_request_fn handler);
 typedef void (*claude_handler_fn)(Shell *sh, int argc, char **argv);
 void shell_set_claude_handler(claude_handler_fn handler);
 
+// Node/npm handler registration (from cmd_system.c)
+typedef void (*node_handler_fn)(Shell *sh, int argc, char **argv);
+void shell_set_node_handler(node_handler_fn handler);
+void shell_set_npm_handler(node_handler_fn handler);
+
 #endif
