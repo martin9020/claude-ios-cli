@@ -49,21 +49,23 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         let state = generateCodeVerifier()
         self.oauthState = state
 
-        // Build authorize URL — exact same params as Claude Code's buildAuthUrl()
-        // Source: j.searchParams.append("code","true"), etc.
-        var components = URLComponents(string: authorizeEndpoint)!
-        components.queryItems = [
-            URLQueryItem(name: "code", value: "true"),                  // tells server to show code
-            URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "redirect_uri", value: manualRedirectUri),
-            URLQueryItem(name: "scope", value: scopes),
-            URLQueryItem(name: "code_challenge", value: challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "state", value: state)
-        ]
+        // Build authorize URL matching JavaScript URLSearchParams encoding exactly.
+        // JS encodes : as %3A and spaces as + which differs from Swift's URLQueryItem.
+        // The server may do exact-match on redirect_uri including encoding.
+        let params = [
+            ("code", "true"),
+            ("client_id", clientId),
+            ("response_type", "code"),
+            ("redirect_uri", manualRedirectUri),
+            ("scope", scopes),
+            ("code_challenge", challenge),
+            ("code_challenge_method", "S256"),
+            ("state", state)
+        ].map { key, value in
+            "\(formEncode(key))=\(formEncode(value))"
+        }.joined(separator: "&")
 
-        guard let authURL = components.url else {
+        guard let authURL = URL(string: "\(authorizeEndpoint)?\(params)") else {
             statusMessage = "Failed to build auth URL"
             isLoading = false
             return
@@ -305,6 +307,18 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         isSignedIn = false
         awaitingCode = false
         statusMessage = "Signed out"
+    }
+
+    // MARK: - URL Encoding (matches JavaScript URLSearchParams)
+
+    /// Encodes a string the same way JavaScript's URLSearchParams does:
+    /// spaces → +, and encodes : / @ etc. (more aggressive than RFC 3986 query encoding)
+    private func formEncode(_ string: String) -> String {
+        // Only unreserved chars are left unencoded: A-Z a-z 0-9 - _ . * and space→+
+        var allowed = CharacterSet()
+        allowed.insert(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.*")
+        return string.addingPercentEncoding(withAllowedCharacters: allowed)?
+            .replacingOccurrences(of: "%20", with: "+") ?? string
     }
 
     // MARK: - PKCE Helpers
