@@ -301,8 +301,19 @@ struct TerminalView: View {
             claudeTerminal.addSystem("Thinking...")
 
             DispatchQueue.global(qos: .userInitiated).async {
+                // Keep app alive while API call runs (prevents screen lock from killing it)
+                var bgTask: UIBackgroundTaskIdentifier = .invalid
+                bgTask = UIApplication.shared.beginBackgroundTask {
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    bgTask = .invalid
+                }
+
                 let response = self.shell.handleClaudeInput(command)
+
                 DispatchQueue.main.async {
+                    if bgTask != .invalid {
+                        UIApplication.shared.endBackgroundTask(bgTask)
+                    }
                     if let idx = self.claudeTerminal.lines.lastIndex(where: { $0.text == "Thinking..." }) {
                         self.claudeTerminal.lines.remove(at: idx)
                     }
@@ -333,8 +344,14 @@ struct TerminalView: View {
                 let message = parts.dropFirst().joined(separator: " ")
                 shellTerminal.addSystem("Thinking...")
                 DispatchQueue.global(qos: .userInitiated).async {
+                    var bgTask: UIBackgroundTaskIdentifier = .invalid
+                    bgTask = UIApplication.shared.beginBackgroundTask {
+                        UIApplication.shared.endBackgroundTask(bgTask)
+                        bgTask = .invalid
+                    }
                     let response = self.shell.claudeOneShot(message)
                     DispatchQueue.main.async {
+                        if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) }
                         if let idx = self.shellTerminal.lines.lastIndex(where: { $0.text == "Thinking..." }) {
                             self.shellTerminal.lines.remove(at: idx)
                         }
