@@ -91,7 +91,6 @@ class ShellBridge: ObservableObject {
         - Be concise — this is a mobile screen
         """
         try? claudeMd.write(to: claudeMdPath, atomically: true, encoding: .utf8)
-        }
 
         // Create shell instance
         ShellBridge.shared = self
