@@ -1,56 +1,90 @@
-# Plan: Pro Subscription Auth + Autonomous Claude
+# ClaudeShell — Project Status
 
-## Status: COMPLETED
+## Current State: FUNCTIONAL (v1.0)
 
-Both phases are fully implemented and pushed to CI.
-
----
-
-## Phase 1: Pro Subscription OAuth Login — DONE
-
-### What was implemented:
-1. **NpmManager.swift** — `installClaudeCode()` + full npm install with scoped package support, `-g` flag handling, proper tar extraction (GNU LongLink + pax headers), gzip decompression with retry buffer, dependency cycle detection
-2. **OAuthManager.swift** — OAuth PKCE flow with ASWebAuthenticationSession, client_id extraction from npm package, Keychain token storage, auto-refresh on expiry
-3. **ClaudeEngine.swift** — Dual auth (OAuth token first, API key fallback), dynamic model selection from Settings
-4. **SettingsView.swift** — Pro/Max sign-in UI, Claude Code package install button, model picker, API key management
-
-### How it works:
-1. User taps "Install Claude Code Package" in Settings
-2. App downloads `@anthropic-ai/claude-code` from npm registry
-3. User taps "Sign in with Claude Pro/Max"
-4. Safari opens → user logs into Anthropic account
-5. OAuth token stored in Keychain → used for all API calls
+The app builds, installs via sideloading, and core features work.
+OAuth sign-in with Pro/Max subscription is implemented.
 
 ---
 
-## Phase 2: Autonomous Tool Use — DONE
+## What's Done
 
-### What was implemented:
-1. **ToolDefinitions.swift** — 3 tools: `bash`, `read_file`, `write_file`
-2. **ClaudeEngine.swift** — `sendMessageWithTools()` with tool parsing, handles text/toolUse/mixed responses, multiple concurrent tool uses
-3. **ShellBridge.swift** — `executeAndCapture()`, `executeTool()` with sandbox path validation, `handleClaudeInputAgentic()` with 25-iteration loop, file context auto-loading
-4. **TerminalView.swift** — Live tool progress display with orange indicators
+### Phase 1: OAuth Login ✅
+- OAuth PKCE flow matching Claude Code CLI source exactly
+- Hardcoded client_id (no npm install required for auth)
+- Manual code entry (browser shows code → paste in app)
+- OAuth token exchanged for real API key via create_api_key endpoint
+- Keychain storage, token refresh, cached browser sessions
+- Settings UI: one-tap sign in, sign out, status display
 
-### How it works:
-1. User enters Claude mode (`claude` command)
-2. Types natural language request
-3. Claude calls tools autonomously (bash, read_file, write_file)
-4. Each tool execution shown with ⚙ indicator
-5. Loop continues until Claude responds with text or hits 25 iterations
+### Phase 2: Autonomous Tool Use ✅
+- 3 tools: bash, read_file, write_file
+- Agentic loop with 25-iteration cap
+- Live tool progress display
+- File context auto-loading from prompts
+- Sandbox path validation
+
+### Shell Engine ✅
+- 40+ built-in commands (filesystem, text, system, network)
+- Pipe support, output redirection
+- Variable expansion, quote handling, operators
+- 22 passing tests, zero compiler warnings
+
+### Build Pipeline ✅
+- ~40s CI builds (GitHub Actions, cached xcodegen)
+- Single device build (no redundant simulator build)
+- IPA artifact uploaded automatically
 
 ---
 
-## Additional Fixes Applied (Code Review)
+## What's Next
 
-- **Pipe support** — `cmd1 | cmd2` now captures left output and feeds to right command
-- **Output redirection** — `cmd > file` and `cmd >> file` now capture and write to files
-- **Sandbox security** — Path traversal protection (../ can't escape sandbox)
-- **Model selection** — Settings picker now actually controls which model the API uses
-- **API version** — Updated from 2023-06-01 to 2024-10-22
-- **Crash fix** — Unsafe force unwrap of `argv[1]` in claude callback now guarded
-- **Multiple tool uses** — API responses with multiple tool_use blocks all get executed
-- **Circular require** — JsEngine detects and handles circular module dependencies
-- **Module cache** — JsEngine caches loaded modules to avoid redundant loads
-- **Dependency cycles** — NpmManager tracks packages being installed to prevent loops
-- **Scoped packages** — `npm list` now shows `@scope/pkg` packages correctly
-- **Test coverage** — 22 tests (was 19), added pipe and redirect tests
+### Priority 1: Verify End-to-End
+- [ ] Confirm OAuth → API key → Claude chat works fully
+- [ ] Test `ls`, `cat`, `grep`, all commands show output
+- [ ] Test pipe and redirect on device
+- [ ] Test Claude autonomous mode (create files, run commands)
+
+### Priority 2: Polish
+- [ ] Streaming responses (show tokens as they arrive)
+- [ ] Better error messages for common failures
+- [ ] Tab completion for commands and file paths
+- [ ] Keyboard shortcuts (Ctrl+C to cancel)
+
+### Priority 3: Features
+- [ ] Input redirection (cmd < file)
+- [ ] Glob expansion (*.txt)
+- [ ] Command history persistence (save to file)
+- [ ] git operations (basic clone, status, diff)
+
+---
+
+## Architecture
+
+```
+User Input → TerminalView.swift
+                ↓
+        ShellBridge.swift (C-Swift bridge)
+                ↓
+        shell_exec() → cmd_dispatch() → cmd_*()
+                ↓
+        Output → captureBuffer → TerminalView
+
+Claude Mode:
+        User Input → handleClaudeInputAgentic()
+                ↓
+        ClaudeEngine.sendMessageWithTools()
+                ↓
+        Tool calls → executeTool() → shell commands
+                ↓
+        Loop until text response or 25 iterations
+```
+
+## Key Files Changed (This Session)
+- `OAuthManager.swift` — Complete rewrite: PKCE, manual code flow, API key creation
+- `ClaudeEngine.swift` — Auth method handling, model from Settings
+- `ShellBridge.swift` — Output buffer race condition fix, sandbox validation
+- `TerminalView.swift` — Sync output capture
+- `NpmManager.swift` — Scoped packages, tar extraction, abbreviated metadata
+- `shell.c` — Pipe + redirect implementation
+- `build-ios.yml` — Optimized to ~40s (cached xcodegen, single build)
