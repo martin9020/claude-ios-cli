@@ -345,7 +345,9 @@ struct TerminalView: View {
     }
 
     private func syncApiKey() {
-        // Load API key from Settings into shell environment
+        // If OAuth is signed in, don't set manual API key (OAuth takes priority)
+        if OAuthManager.shared.isSignedIn { return }
+        // Load manual API key from Settings into shell environment
         if !savedApiKey.isEmpty {
             shell.execute("export ANTHROPIC_API_KEY=\(savedApiKey)")
             shell.clearOutput()

@@ -263,7 +263,7 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(oauthToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // No Content-Type — source sends null body (no body at all)
         request.timeoutInterval = 15
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
@@ -297,13 +297,15 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
                     return
                 }
 
-                // Store the actual API key — this is what the Claude API accepts
+                // Store the API key — this is what the Claude API accepts
                 self.saveToKeychain(key: self.keychainAccessToken, value: rawKey)
-                // Also store the OAuth token for future refresh
+                // Store OAuth bearer token for future refresh
                 self.saveToKeychain(key: "com.claudeshell.oauth.bearerToken", value: oauthToken)
+                // Clear any manual API key so OAuth key is used
+                UserDefaults.standard.set("", forKey: "anthropic_api_key")
 
                 self.isSignedIn = true
-                self.statusMessage = "Signed in successfully!"
+                self.statusMessage = "Signed in! Key: \(String(rawKey.prefix(12)))..."
             }
         }.resume()
     }
