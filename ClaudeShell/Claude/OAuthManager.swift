@@ -84,7 +84,9 @@ class OAuthManager: NSObject, ObservableObject, ASWebAuthenticationPresentationC
         }
 
         session.presentationContextProvider = self
-        session.prefersEphemeralWebBrowserSession = false
+        // Use ephemeral session — no shared cookies from Safari that could
+        // cause stale auth or auto-redirect with old codes
+        session.prefersEphemeralWebBrowserSession = true
         session.start()
     }
 
