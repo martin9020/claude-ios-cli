@@ -338,12 +338,15 @@ static int handle_redirect(Shell *sh, char *line) {
         return 1;
     }
 
-    // Resolve path
+    // Resolve path — /dev/null discards output silently
+    int devnull = (strcmp(filename, "/dev/null") == 0);
     char filepath[SHELL_MAX_PATH * 2];
-    if (filename[0] == '/') {
-        snprintf(filepath, sizeof(filepath), "%s%s", sh->root, filename);
-    } else {
-        snprintf(filepath, sizeof(filepath), "%s/%s", sh->cwd, filename);
+    if (!devnull) {
+        if (filename[0] == '/') {
+            snprintf(filepath, sizeof(filepath), "%s%s", sh->root, filename);
+        } else {
+            snprintf(filepath, sizeof(filepath), "%s/%s", sh->cwd, filename);
+        }
     }
 
     // Capture output by temporarily replacing output function
@@ -360,16 +363,18 @@ static int handle_redirect(Shell *sh, char *line) {
     sh->output = saved_output;
     sh->output_ctx = saved_ctx;
 
-    // Write captured output to file
-    FILE *fp = fopen(filepath, append ? "a" : "w");
-    if (fp) {
-        if (_redirect_len > 0) {
-            fwrite(_redirect_buf, 1, _redirect_len, fp);
+    // Write captured output to file (skip for /dev/null)
+    if (!devnull) {
+        FILE *fp = fopen(filepath, append ? "a" : "w");
+        if (fp) {
+            if (_redirect_len > 0) {
+                fwrite(_redirect_buf, 1, _redirect_len, fp);
+            }
+            fclose(fp);
+        } else {
+            shell_printf(sh, "claudeshell: cannot open '%s' for writing\n", filename);
+            return 1;
         }
-        fclose(fp);
-    } else {
-        shell_printf(sh, "claudeshell: cannot open '%s' for writing\n", filename);
-        return 1;
     }
 
     return ret;
@@ -387,6 +392,15 @@ int shell_exec(Shell *sh, const char *line) {
     char linebuf[SHELL_MAX_LINE];
     strncpy(linebuf, line, SHELL_MAX_LINE - 1);
     linebuf[SHELL_MAX_LINE - 1] = '\0';
+
+    // Strip 2>/dev/null and 2>&1 (we don't have stderr, just ignore these)
+    char *stderr_redir;
+    while ((stderr_redir = strstr(linebuf, "2>/dev/null")) != NULL) {
+        memmove(stderr_redir, stderr_redir + 11, strlen(stderr_redir + 11) + 1);
+    }
+    while ((stderr_redir = strstr(linebuf, "2>&1")) != NULL) {
+        memmove(stderr_redir, stderr_redir + 4, strlen(stderr_redir + 4) + 1);
+    }
 
     // Check for && and ||
     char *and_pos = strstr(linebuf, "&&");
