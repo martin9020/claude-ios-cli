@@ -1,40 +1,50 @@
-# ClaudeShell QA Test — Regression Only
+# ClaudeShell QA Test Suite
 
-Previous: 43/50 passed. 4 bugs fixed. Run this to verify fixes.
+**Status: 86/86 PASSED (100%)** — 2026-03-14
 
 ---
 
-## Paste this in Claude tab:
+## Automated Tests (paste in Claude tab)
+
+### Full Suite — 50 tests across 7 sections
 
 ```
-Run these 9 tests. For each: run the command, check output, mark PASS/FAIL. Write results to /qa_regression.md then cat it.
+Run a full QA sweep of ClaudeShell. Test every command category below. For each test, run the command, verify output, mark PASS/FAIL. Write a summary table to /qa_results.md then cat it.
 
-1. sort /qa_test/sort2.txt | uniq -c
-   Expected: counts like "2 apple", "1 banana", "1 cherry"
+FILESYSTEM: mkdir, touch, echo >, cat, ls, ls -la, cp, mv, rm, pwd, cd, cd .., cd /, find -name, find -type, du, chmod
 
-2. echo "one:two:three" > /qa_test/cut3.txt && cut -d':' -f2 /qa_test/cut3.txt
-   Expected: two
+TEXT: head -2, tail -2, wc -l, grep, grep -n, grep -i, grep -c, grep -v, sort, sort -r, sort|uniq, uniq -c, cut -d':' -f2, cut -d':' -f1,3, cut -c1-3, sed 's/old/new/', echo|tr 'a-z' 'A-Z', echo|tr -d 'l', echo|tr -s ' ', diff
 
-3. cut -d':' -f1,3 /qa_test/cut3.txt
-   Expected: one:three
+SYSTEM: echo, echo -n, env, which, date, test -f, test -d, basename, dirname, true&&echo, false||echo
 
-4. cut -d':' -f1 /qa_test/cut3.txt
-   Expected: one
+SHELL: VAR=val echo $VAR, ${VAR} expansion, $? exit code, echo>file redirect, echo>>file append, echo|grep pipe, "double quotes", 'single quotes', && chaining, || fallback, export
 
-5. cut -c1-3 /qa_test/cut3.txt
-   Expected: one
+NETWORK: curl https://httpbin.org/get, curl -X POST
 
-6. echo "Hello World" | tr 'a-z' 'A-Z'
-   Expected: HELLO WORLD
+NODE: node -e "console.log('hi')", node -e "console.log(2+2)", npm list, npm help
 
-7. echo "Hello World" | tr -d 'l'
-   Expected: Heo Word
+CLAUDE TOOLS: write_file, read_file, ls via bash
 
-8. echo "hello    world" | tr -s ' '
-   Expected: hello world
-
-9. echo "aabbcc" | tr -s 'a'
-   Expected: abbcc
-
-Format results as markdown table with columns: #, Command, Expected, Got, Status
+Create test files as needed. Format: markdown table with #, Command, Expected, Got, Status.
 ```
+
+---
+
+## Manual Tests
+
+### Dual Tabs ✅
+1. Shell tab (green) + Claude tab (purple) visible in status bar
+2. Shell tab: `ls -la` shows output
+3. Claude tab: auto-enters Claude mode with banner
+4. Switching preserves each tab's output independently
+5. `/exit` in Claude switches to Shell tab
+6. `claude` in Shell switches to Claude tab
+
+### Files App Access ✅
+1. iOS Files > On My iPhone > ClaudeShell
+2. All sandbox files visible and readable
+3. Files shareable via AirDrop/copy
+
+### Copy Button ✅
+1. Yellow "copy" button copies active tab's full log
+2. Each tab copies its own log independently
